@@ -5,6 +5,11 @@ import {
   fertilitySuccess,
   isMarriageable,
 } from "../data/life-cycle.js";
+import {
+  createRelation,
+  relationName,
+  resetRelationRoundUsage,
+} from "./relations.js";
 
 export const FAMILY_NAMES = [
   "清河崔氏",
@@ -27,6 +32,7 @@ export const ACTIONS = Object.freeze({
   SEEK_OFFICE: "seek_office",
   TAKE_TASK: "take_task",
   MARRIAGE: "marriage",
+  PROPOSE_ALLIANCE: "propose_alliance",
   GATHER_MONEY: "gather_money",
   GATHER_FOOD: "gather_food",
 });
@@ -232,13 +238,10 @@ function createFamilyRelations(families) {
     for (let j = i + 1; j < families.length; j += 1) {
       const familyA = families[i];
       const familyB = families[j];
-      relations.set(relationKey(familyA.id, familyB.id), {
-        familyAId: familyA.id,
-        familyBId: familyB.id,
-        depth: 0,
-        marriages: 0,
-        alliance: false,
-      });
+      relations.set(
+        relationKey(familyA.id, familyB.id),
+        createRelation(familyA.id, familyB.id),
+      );
     }
   }
 
@@ -287,6 +290,7 @@ export function createGame({ playerCount = 4, seed = 1 } = {}) {
     marriages: [],
     nextMarriageNumber: 1,
     nextChildNumber: 1,
+    nextAllianceNumber: 1,
     log: [],
   };
 
@@ -335,6 +339,10 @@ export function startRound(game) {
       family.actionEconomy.baseActions + family.actionEconomy.extraActions;
     family.actionEconomy.extraActions = 0;
   }
+
+  for (const relation of game.familyRelations.values()) {
+    resetRelationRoundUsage(relation);
+  }
 }
 
 function drawWorldEvents(game, count = 2) {
@@ -372,6 +380,14 @@ function memberCanAct(member) {
 
 function officeById(game, officeId) {
   return game.officeBoard.find((office) => office.id === officeId) ?? null;
+}
+
+function familyById(game, familyId) {
+  return game.families.find((family) => family.id === familyId) ?? null;
+}
+
+function findMember(family, memberId) {
+  return family.members.find((member) => member.id === memberId) ?? null;
 }
 
 function canSeekOffice(game, family, member, targetOffice) {
@@ -415,6 +431,36 @@ function getOfficeActions(game, family) {
   return actions;
 }
 
+function getAvailableAssistants(game, family, task, actorId) {
+  const assistants = [];
+
+  for (const allyFamily of game.families) {
+    if (allyFamily.id === family.id) continue;
+
+    const relation = getFamilyRelation(game, family.id, allyFamily.id);
+    if (!relation || relation.depth < 3) continue;
+
+    for (const member of allyFamily.members) {
+      if (!memberCanAct(member)) continue;
+
+      const freeAtDepthFive =
+        relation.depth >= 5 && !relation.roundUsage.freeAssistUsed;
+
+      if (!freeAtDepthFive && allyFamily.actionEconomy.remaining <= 0) {
+        continue;
+      }
+
+      assistants.push({
+        assistingFamilyId: allyFamily.id,
+        assistingMemberId: member.id,
+        freeAtDepthFive,
+      });
+    }
+  }
+
+  return assistants;
+}
+
 function getTaskActions(game, family) {
   const actions = [];
 
@@ -428,6 +474,21 @@ function getTaskActions(game, family) {
         actorId: member.id,
         taskInstanceId: task.instanceId,
       });
+
+      for (const assistant of getAvailableAssistants(
+        game,
+        family,
+        task,
+        member.id,
+      )) {
+        actions.push({
+          type: ACTIONS.TAKE_TASK,
+          category: task.actionCategory,
+          actorId: member.id,
+          taskInstanceId: task.instanceId,
+          assistance: assistant,
+        });
+      }
     }
   }
 
@@ -466,6 +527,20 @@ function getMarriageActions(game, family) {
   return actions;
 }
 
+function getAllianceActions(game, family) {
+  return game.families
+    .filter((target) => target.id !== family.id)
+    .filter((target) => {
+      const relation = getFamilyRelation(game, family.id, target.id);
+      return relation && !relation.alliance;
+    })
+    .map((target) => ({
+      type: ACTIONS.PROPOSE_ALLIANCE,
+      category: "政治",
+      targetFamilyId: target.id,
+    }));
+}
+
 export function getLegalActions(game, family) {
   if (family.actionEconomy.remaining <= 0) return [];
 
@@ -473,6 +548,7 @@ export function getLegalActions(game, family) {
     ...getOfficeActions(game, family),
     ...getTaskActions(game, family),
     ...getMarriageActions(game, family),
+    ...getAllianceActions(game, family),
     {
       type: ACTIONS.GATHER_MONEY,
       category: "家族",
@@ -482,14 +558,6 @@ export function getLegalActions(game, family) {
       category: "家族",
     },
   ];
-}
-
-function findMember(family, memberId) {
-  return family.members.find((member) => member.id === memberId) ?? null;
-}
-
-function familyById(game, familyId) {
-  return game.families.find((family) => family.id === familyId) ?? null;
 }
 
 function spendAction(family) {
@@ -541,6 +609,52 @@ function applySeekOffice(game, family, action) {
   return { die, result, success: true, officeId: targetOffice.id };
 }
 
+function applyTaskAssistance(game, family, task, assistance) {
+  if (!assistance) return { abilityBonus: 0, assistance: null };
+
+  const assistingFamily = familyById(game, assistance.assistingFamilyId);
+  const assistingMember = assistingFamily
+    ? findMember(assistingFamily, assistance.assistingMemberId)
+    : null;
+  const relation = assistingFamily
+    ? getFamilyRelation(game, family.id, assistingFamily.id)
+    : null;
+
+  if (
+    !assistingFamily ||
+    !assistingMember ||
+    !memberCanAct(assistingMember) ||
+    !relation ||
+    relation.depth < 3
+  ) {
+    throw new Error("這次協力已不是合法行動。");
+  }
+
+  const freeAtDepthFive =
+    relation.depth >= 5 && !relation.roundUsage.freeAssistUsed;
+
+  if (freeAtDepthFive) {
+    relation.roundUsage.freeAssistUsed = true;
+  } else {
+    if (assistingFamily.actionEconomy.remaining <= 0) {
+      throw new Error("協力家族已無主要行動可供支援。");
+    }
+    assistingFamily.actionEconomy.remaining -= 1;
+  }
+
+  assistingMember.actedThisRound = true;
+
+  return {
+    abilityBonus: 1,
+    assistance: {
+      familyId: assistingFamily.id,
+      memberId: assistingMember.id,
+      free: freeAtDepthFive,
+      relationDepth: relation.depth,
+    },
+  };
+}
+
 function applyTask(game, family, action) {
   const member = findMember(family, action.actorId);
   const taskIndex = game.publicTasks.findIndex(
@@ -552,10 +666,21 @@ function applyTask(game, family, action) {
     throw new Error("這次承接任務已不是合法行動。");
   }
 
+  const assistanceResult = applyTaskAssistance(
+    game,
+    family,
+    task,
+    action.assistance,
+  );
+
   member.actedThisRound = true;
   const die = rollD6(game);
-  const ability = member.abilities[task.ability];
-  const result = resolveAbilityRoll(ability, die);
+  const baseAbility = member.abilities[task.ability];
+  const effectiveAbility = Math.min(
+    5,
+    baseAbility + assistanceResult.abilityBonus,
+  );
+  const result = resolveAbilityRoll(effectiveAbility, die);
 
   game.publicTasks.splice(taskIndex, 1);
 
@@ -568,6 +693,7 @@ function applyTask(game, family, action) {
       result,
       actorId: member.id,
       round: game.round,
+      assistance: assistanceResult.assistance,
     });
 
     if (result === "success") family.resources.influence += 1;
@@ -585,6 +711,9 @@ function applyTask(game, family, action) {
     success: isSuccess(result),
     taskName: task.name,
     major: task.major,
+    baseAbility,
+    effectiveAbility,
+    assistance: assistanceResult.assistance,
   };
 }
 
@@ -664,6 +793,203 @@ function applyMarriage(game, family, action) {
   };
 }
 
+function applyAllianceProposal(game, family, action) {
+  const targetFamily = familyById(game, action.targetFamilyId);
+  const relation = targetFamily
+    ? getFamilyRelation(game, family.id, targetFamily.id)
+    : null;
+
+  if (!targetFamily || !relation || relation.alliance) {
+    throw new Error("這次盟約提議已不是合法行動。");
+  }
+
+  return {
+    success: true,
+    pendingDecision: {
+      type: "allianceProposal",
+      proposerFamilyId: family.id,
+      targetFamilyId: targetFamily.id,
+    },
+  };
+}
+
+export function resolveAllianceProposal(
+  game,
+  proposerFamilyId,
+  targetFamilyId,
+  accepted,
+) {
+  const proposer = familyById(game, proposerFamilyId);
+  const target = familyById(game, targetFamilyId);
+  const relation = getFamilyRelation(game, proposerFamilyId, targetFamilyId);
+
+  if (!proposer || !target || !relation || relation.alliance) {
+    throw new Error("盟約提議無法結算。");
+  }
+
+  if (!accepted) {
+    return {
+      accepted: false,
+      depth: relation.depth,
+      relationName: relationName(relation.depth),
+    };
+  }
+
+  const allianceId = `alliance-${game.nextAllianceNumber}`;
+  game.nextAllianceNumber += 1;
+  relation.alliance = true;
+  relation.allianceId = allianceId;
+  relation.depth = Math.min(5, relation.depth + 1);
+
+  return {
+    accepted: true,
+    allianceId,
+    depth: relation.depth,
+    relationName: relationName(relation.depth),
+  };
+}
+
+export function dissolveAllianceMutually(game, familyAId, familyBId) {
+  const relation = getFamilyRelation(game, familyAId, familyBId);
+
+  if (!relation?.alliance) {
+    throw new Error("雙方目前沒有可解除的盟約。");
+  }
+
+  relation.alliance = false;
+  relation.allianceId = null;
+  relation.depth = Math.max(0, relation.depth - 1);
+
+  return {
+    depth: relation.depth,
+    relationName: relationName(relation.depth),
+  };
+}
+
+export function betrayAlliance(game, actorFamilyId, targetFamilyId) {
+  const actor = familyById(game, actorFamilyId);
+  const relation = getFamilyRelation(game, actorFamilyId, targetFamilyId);
+
+  if (!actor || !relation?.alliance) {
+    throw new Error("目前沒有可背棄的盟約。");
+  }
+
+  const originalDepth = relation.depth;
+  actor.resources.influence = Math.max(
+    0,
+    actor.resources.influence - originalDepth,
+  );
+  relation.alliance = false;
+  relation.allianceId = null;
+  relation.depth = Math.max(0, relation.depth - 2);
+
+  return {
+    influenceLost: originalDepth,
+    depth: relation.depth,
+    relationName: relationName(relation.depth),
+  };
+}
+
+export function canDirectHostileAction(game, actorFamilyId, targetFamilyId) {
+  const relation = getFamilyRelation(game, actorFamilyId, targetFamilyId);
+  return !relation?.alliance;
+}
+
+export function provideFamilyAid(
+  game,
+  fromFamilyId,
+  toFamilyId,
+  { money = 0, food = 0 } = {},
+) {
+  const from = familyById(game, fromFamilyId);
+  const to = familyById(game, toFamilyId);
+  const relation = getFamilyRelation(game, fromFamilyId, toFamilyId);
+  const total = money + food;
+
+  if (!from || !to || !relation || relation.depth < 1) {
+    throw new Error("雙方關係尚未達到「往來」。");
+  }
+
+  if (
+    !Number.isInteger(money) ||
+    !Number.isInteger(food) ||
+    money < 0 ||
+    food < 0 ||
+    total < 1 ||
+    total > 2
+  ) {
+    throw new Error("一次援助最多移轉 2 點錢／糧食。");
+  }
+
+  if (relation.roundUsage.aidProvidedBy[fromFamilyId]) {
+    throw new Error("本回合此家族已提供過一次免費援助。");
+  }
+
+  if (from.resources.money < money || from.resources.food < food) {
+    throw new Error("援助方資源不足。");
+  }
+
+  from.resources.money -= money;
+  from.resources.food -= food;
+  to.resources.money += money;
+  to.resources.food += food;
+  relation.roundUsage.aidProvidedBy[fromFamilyId] = true;
+
+  return { money, food };
+}
+
+export function markFreeAssetTransferUsed(game, familyAId, familyBId) {
+  const relation = getFamilyRelation(game, familyAId, familyBId);
+
+  if (!relation || relation.depth < 2) {
+    throw new Error("雙方關係尚未達到「通財」。");
+  }
+
+  if (relation.roundUsage.freeAssetTransferUsed) {
+    throw new Error("本回合已使用過一次免費資產讓渡。");
+  }
+
+  relation.roundUsage.freeAssetTransferUsed = true;
+  return true;
+}
+
+export function shareResourceLoss(
+  game,
+  helperFamilyId,
+  affectedFamilyId,
+  resource,
+) {
+  const helper = familyById(game, helperFamilyId);
+  const affected = familyById(game, affectedFamilyId);
+  const relation = getFamilyRelation(game, helperFamilyId, affectedFamilyId);
+
+  if (!helper || !affected || !relation || relation.depth < 4) {
+    throw new Error("雙方關係尚未達到「共擔」。");
+  }
+
+  if (relation.roundUsage.sharedBurdenUsed) {
+    throw new Error("本回合已使用過一次「共擔」。");
+  }
+
+  if (!["money", "food"].includes(resource)) {
+    throw new Error("目前「共擔」只支援錢或糧食損失。");
+  }
+
+  if (helper.resources[resource] < 1) {
+    throw new Error("協助方沒有足夠資源承擔損失。");
+  }
+
+  helper.resources[resource] -= 1;
+  relation.roundUsage.sharedBurdenUsed = true;
+
+  return {
+    helperFamilyId,
+    affectedFamilyId,
+    resource,
+    amount: 1,
+  };
+}
+
 export function applyAction(game, family, action) {
   const legal = getLegalActions(game, family).some(
     (candidate) => JSON.stringify(candidate) === JSON.stringify(action),
@@ -682,6 +1008,8 @@ export function applyAction(game, family, action) {
       return applyTask(game, family, action);
     case ACTIONS.MARRIAGE:
       return applyMarriage(game, family, action);
+    case ACTIONS.PROPOSE_ALLIANCE:
+      return applyAllianceProposal(game, family, action);
     case ACTIONS.GATHER_MONEY:
       family.resources.money += 1;
       return { success: true };
@@ -806,10 +1134,16 @@ export function runGame({
   playerCount = 4,
   seed = 1,
   chooseAction,
+  respondToAlliance,
 } = {}) {
   if (typeof chooseAction !== "function") {
     throw new Error("runGame 需要 chooseAction 函式。");
   }
+
+  const allianceResponder =
+    typeof respondToAlliance === "function"
+      ? respondToAlliance
+      : () => false;
 
   const game = createGame({ playerCount, seed });
 
@@ -838,7 +1172,31 @@ export function runGame({
           continue;
         }
 
-        applyAction(game, family, action);
+        const actionResult = applyAction(game, family, action);
+
+        if (actionResult?.pendingDecision?.type === "allianceProposal") {
+          const proposer = familyById(
+            game,
+            actionResult.pendingDecision.proposerFamilyId,
+          );
+          const target = familyById(
+            game,
+            actionResult.pendingDecision.targetFamilyId,
+          );
+          const accepted = allianceResponder({
+            game,
+            proposer,
+            target,
+            rng: game.rng,
+          });
+
+          resolveAllianceProposal(
+            game,
+            proposer.id,
+            target.id,
+            Boolean(accepted),
+          );
+        }
       }
     }
 
@@ -863,6 +1221,17 @@ export function runGame({
     game,
     outcome: determineWinners(game.families),
   };
+}
+
+export function relationSnapshot(game) {
+  return [...game.familyRelations.values()].map((relation) => ({
+    familyAId: relation.familyAId,
+    familyBId: relation.familyBId,
+    depth: relation.depth,
+    name: relationName(relation.depth),
+    alliance: relation.alliance,
+    marriages: relation.marriages,
+  }));
 }
 
 export function familySnapshot(family) {

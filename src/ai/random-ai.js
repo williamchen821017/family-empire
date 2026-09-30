@@ -9,3 +9,7 @@ export function chooseRandomAction({ legalActions, rng }) {
 
   return candidates[Math.floor(rng() * candidates.length)];
 }
+
+export function respondToAllianceProposal({ rng }) {
+  return rng() < 0.5;
+}

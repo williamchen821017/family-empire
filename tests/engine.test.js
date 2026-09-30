@@ -1,20 +1,30 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { chooseRandomAction } from "../src/ai/random-ai.js";
+import {
+  chooseRandomAction,
+  respondToAllianceProposal,
+} from "../src/ai/random-ai.js";
 import {
   ABILITY_RESULT_TABLE,
   ACTIONS,
   applyAction,
+  betrayAlliance,
+  canDirectHostileAction,
   createGame,
   determineWinners,
+  dissolveAllianceMutually,
   evaluateFamily,
   getFamilyRelation,
   getLegalActions,
   grantExtraAction,
+  markFreeAssetTransferUsed,
   processBirths,
+  provideFamilyAid,
   resolveAbilityRoll,
+  resolveAllianceProposal,
   runGame,
+  shareResourceLoss,
   startRound,
 } from "../src/engine/game-engine.js";
 
@@ -302,6 +312,185 @@ test("同一對夫婦最多只有 3 名進入遊戲的子女", () => {
   assert.equal(marriage.children.length, 3);
 });
 
+test("正式盟約成立時，關係深度 +1 並禁止直接敵對行動", () => {
+  const game = createGame({ playerCount: 2, seed: 9 });
+  const family = game.families[0];
+
+  const allianceAction = getLegalActions(game, family).find(
+    (action) => action.type === ACTIONS.PROPOSE_ALLIANCE,
+  );
+
+  assert.ok(allianceAction);
+  const proposal = applyAction(game, family, allianceAction);
+
+  const resolved = resolveAllianceProposal(
+    game,
+    proposal.pendingDecision.proposerFamilyId,
+    proposal.pendingDecision.targetFamilyId,
+    true,
+  );
+
+  assert.equal(resolved.accepted, true);
+
+  const relation = getFamilyRelation(
+    game,
+    proposal.pendingDecision.proposerFamilyId,
+    proposal.pendingDecision.targetFamilyId,
+  );
+
+  assert.equal(relation.alliance, true);
+  assert.equal(relation.depth, 1);
+  assert.equal(
+    canDirectHostileAction(
+      game,
+      proposal.pendingDecision.proposerFamilyId,
+      proposal.pendingDecision.targetFamilyId,
+    ),
+    false,
+  );
+});
+
+test("和平解除盟約只讓關係 -1，不扣影響力", () => {
+  const game = createGame({ playerCount: 2, seed: 10 });
+  const a = game.families[0];
+  const b = game.families[1];
+  const relation = getFamilyRelation(game, a.id, b.id);
+
+  relation.depth = 3;
+  relation.alliance = true;
+  relation.allianceId = "alliance-test";
+  const beforeInfluence = a.resources.influence;
+
+  const result = dissolveAllianceMutually(game, a.id, b.id);
+
+  assert.equal(result.depth, 2);
+  assert.equal(relation.alliance, false);
+  assert.equal(a.resources.influence, beforeInfluence);
+});
+
+test("背盟會依原關係深度扣影響力，關係再 -2", () => {
+  const game = createGame({ playerCount: 2, seed: 11 });
+  const a = game.families[0];
+  const b = game.families[1];
+  const relation = getFamilyRelation(game, a.id, b.id);
+
+  relation.depth = 4;
+  relation.alliance = true;
+  relation.allianceId = "alliance-test";
+  a.resources.influence = 10;
+
+  const result = betrayAlliance(game, a.id, b.id);
+
+  assert.equal(result.influenceLost, 4);
+  assert.equal(a.resources.influence, 6);
+  assert.equal(relation.depth, 2);
+  assert.equal(relation.alliance, false);
+  assert.equal(canDirectHostileAction(game, a.id, b.id), true);
+});
+
+test("關係 1 的「往來」每方每回合可免費援助一次，總量最多 2", () => {
+  const game = createGame({ playerCount: 2, seed: 12 });
+  const a = game.families[0];
+  const b = game.families[1];
+  const relation = getFamilyRelation(game, a.id, b.id);
+  relation.depth = 1;
+
+  provideFamilyAid(game, a.id, b.id, { money: 1, food: 1 });
+
+  assert.equal(a.resources.money, 2);
+  assert.equal(a.resources.food, 2);
+  assert.equal(b.resources.money, 4);
+  assert.equal(b.resources.food, 4);
+
+  assert.throws(() =>
+    provideFamilyAid(game, a.id, b.id, { money: 1 }),
+  );
+
+  provideFamilyAid(game, b.id, a.id, { money: 1 });
+  assert.equal(a.resources.money, 3);
+});
+
+test("關係 2 的「通財」每回合只能免費資產讓渡一次", () => {
+  const game = createGame({ playerCount: 2, seed: 13 });
+  const a = game.families[0];
+  const b = game.families[1];
+  const relation = getFamilyRelation(game, a.id, b.id);
+  relation.depth = 2;
+
+  assert.equal(markFreeAssetTransferUsed(game, a.id, b.id), true);
+  assert.throws(() =>
+    markFreeAssetTransferUsed(game, a.id, b.id),
+  );
+});
+
+test("關係 4 的「共擔」每回合只能替對方承擔 1 點資源損失一次", () => {
+  const game = createGame({ playerCount: 2, seed: 14 });
+  const a = game.families[0];
+  const b = game.families[1];
+  const relation = getFamilyRelation(game, a.id, b.id);
+  relation.depth = 4;
+  const before = a.resources.food;
+
+  shareResourceLoss(game, a.id, b.id, "food");
+
+  assert.equal(a.resources.food, before - 1);
+  assert.throws(() =>
+    shareResourceLoss(game, a.id, b.id, "food"),
+  );
+});
+
+test("關係 3 的協力會花援助方 1 個行動並讓主行動能力 +1", () => {
+  const game = createGame({ playerCount: 2, seed: 15 });
+  const a = game.families[0];
+  const b = game.families[1];
+  const relation = getFamilyRelation(game, a.id, b.id);
+  relation.depth = 3;
+
+  const assisted = getLegalActions(game, a).find(
+    (action) =>
+      action.type === ACTIONS.TAKE_TASK &&
+      action.assistance?.assistingFamilyId === b.id,
+  );
+
+  assert.ok(assisted);
+  const beforeActions = b.actionEconomy.remaining;
+  game.rng = () => 0.5;
+
+  const result = applyAction(game, a, assisted);
+
+  assert.equal(b.actionEconomy.remaining, beforeActions - 1);
+  assert.equal(result.effectiveAbility, Math.min(5, result.baseAbility + 1));
+  assert.equal(result.assistance.free, false);
+});
+
+test("關係 5 的共進退每回合第一次協力不花援助方行動，但仍使用該人物", () => {
+  const game = createGame({ playerCount: 2, seed: 16 });
+  const a = game.families[0];
+  const b = game.families[1];
+  const relation = getFamilyRelation(game, a.id, b.id);
+  relation.depth = 5;
+
+  const assisted = getLegalActions(game, a).find(
+    (action) =>
+      action.type === ACTIONS.TAKE_TASK &&
+      action.assistance?.assistingFamilyId === b.id,
+  );
+
+  assert.ok(assisted);
+  const helper = b.members.find(
+    (member) => member.id === assisted.assistance.assistingMemberId,
+  );
+  const beforeActions = b.actionEconomy.remaining;
+  game.rng = () => 0.5;
+
+  const result = applyAction(game, a, assisted);
+
+  assert.equal(b.actionEconomy.remaining, beforeActions);
+  assert.equal(helper.actedThisRound, true);
+  assert.equal(result.assistance.free, true);
+  assert.equal(relation.roundUsage.freeAssistUsed, true);
+});
+
 test("達成五項條件時，應取得五項歷史評定", () => {
   const result = evaluateFamily(makeFamily());
 
@@ -330,11 +519,13 @@ test("同一 seed 的 AI 模擬應得到相同終局", () => {
     playerCount: 4,
     seed: 42,
     chooseAction: chooseRandomAction,
+    respondToAlliance: respondToAllianceProposal,
   });
   const second = runGame({
     playerCount: 4,
     seed: 42,
     chooseAction: chooseRandomAction,
+    respondToAlliance: respondToAllianceProposal,
   });
 
   assert.equal(first.game.round, second.game.round);
@@ -350,6 +541,7 @@ test("AI 試跑應在事件牌堆規定的範圍內結束", () => {
     playerCount: 5,
     seed: 777,
     chooseAction: chooseRandomAction,
+    respondToAlliance: respondToAllianceProposal,
   });
 
   assert.equal(result.game.ended, true);

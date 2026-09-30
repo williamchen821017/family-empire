@@ -1,5 +1,12 @@
-import { chooseRandomAction } from "../ai/random-ai.js";
-import { familySnapshot, runGame } from "../engine/game-engine.js";
+import {
+  chooseRandomAction,
+  respondToAllianceProposal,
+} from "../ai/random-ai.js";
+import {
+  familySnapshot,
+  relationSnapshot,
+  runGame,
+} from "../engine/game-engine.js";
 
 function toPositiveInteger(value, fallback) {
   const parsed = Number.parseInt(value, 10);
@@ -16,6 +23,9 @@ let roundTotal = 0;
 let sharedWinGames = 0;
 let marriageTotal = 0;
 let birthTotal = 0;
+let allianceTotal = 0;
+let depthTotal = 0;
+let relationCountTotal = 0;
 
 for (let index = 0; index < gameCount; index += 1) {
   const seed = 1000 + index;
@@ -23,6 +33,7 @@ for (let index = 0; index < gameCount; index += 1) {
     playerCount,
     seed,
     chooseAction: chooseRandomAction,
+    respondToAlliance: respondToAllianceProposal,
   });
 
   roundTotal += game.round;
@@ -31,6 +42,11 @@ for (let index = 0; index < gameCount; index += 1) {
     (sum, family) => sum + family.stats.births,
     0,
   );
+
+  const relations = relationSnapshot(game);
+  allianceTotal += relations.filter((relation) => relation.alliance).length;
+  depthTotal += relations.reduce((sum, relation) => sum + relation.depth, 0);
+  relationCountTotal += relations.length;
 
   if (outcome.winners.length > 1) sharedWinGames += 1;
 
@@ -54,13 +70,16 @@ for (let index = 0; index < gameCount; index += 1) {
   }
 
   if (gameCount === 1) {
-    console.log("《家族天下》AI 試跑 V0.3｜聯姻、族譜、子嗣正式化");
+    console.log("《家族天下》AI 試跑 V0.4｜關係軌與盟約正式化");
     console.log(`Seed：${seed}`);
     console.log(`玩家數：${playerCount}`);
     console.log(`終局回合：第 ${game.round} 回合`);
     console.log(`終局原因：${game.endReason}`);
     console.log(`本局婚姻：${game.marriages.length} 對`);
     console.log(`本局誕育：${game.families.reduce((sum, family) => sum + family.stats.births, 0)} 人`);
+    console.log(
+      `終局仍有效盟約：${relations.filter((relation) => relation.alliance).length} 個`,
+    );
     console.log("");
 
     for (const family of game.families) {
@@ -75,6 +94,14 @@ for (let index = 0; index < gameCount; index += 1) {
       console.log("");
     }
 
+    console.log("終局家族關係：");
+    for (const relation of relations) {
+      console.log(
+        `- ${relation.familyAId} ↔ ${relation.familyBId}：${relation.name}（${relation.depth}），盟約：${relation.alliance ? "有" : "無"}`,
+      );
+    }
+
+    console.log("");
     console.log(
       `勝利玩家：${outcome.winners.map((winner) => winner.familyName).join("、")}`,
     );
@@ -82,11 +109,15 @@ for (let index = 0; index < gameCount; index += 1) {
 }
 
 if (gameCount > 1) {
-  console.log(`《家族天下》AI 批次試跑 V0.3：${gameCount} 局`);
+  console.log(`《家族天下》AI 批次試跑 V0.4：${gameCount} 局`);
   console.log(`玩家數：${playerCount}`);
   console.log(`平均終局回合：${(roundTotal / gameCount).toFixed(2)}`);
   console.log(`平均每局婚姻：${(marriageTotal / gameCount).toFixed(2)} 對`);
   console.log(`平均每局誕育：${(birthTotal / gameCount).toFixed(2)} 人`);
+  console.log(`平均終局有效盟約：${(allianceTotal / gameCount).toFixed(2)} 個`);
+  console.log(
+    `平均關係深度：${relationCountTotal ? (depthTotal / relationCountTotal).toFixed(2) : "0.00"}`,
+  );
   console.log(
     `共同勝利局數：${sharedWinGames}（${((sharedWinGames / gameCount) * 100).toFixed(1)}%）`,
   );
