@@ -1495,6 +1495,7 @@ export function runGame({
   chooseInternalCard,
   chooseRewardCard,
   shouldRevealAmbition,
+  configureGame,
 } = {}) {
   if (typeof chooseAction !== "function") {
     throw new Error("runGame 需要 chooseAction 函式。");
@@ -1510,6 +1511,10 @@ export function runGame({
     seed,
     chooseAmbition,
   });
+
+  if (typeof configureGame === "function") {
+    configureGame({ game });
+  }
 
   while (!game.ended) {
     drawWorldEvents(game, 2);

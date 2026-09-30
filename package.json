@@ -9,6 +9,8 @@
     "simulate:100": "node src/simulation/run-simulation.js 100",
     "simulate:1000": "node src/simulation/run-simulation.js 1000",
     "simulate:strategy": "node src/simulation/run-simulation.js 1 4 ambition",
-    "simulate:strategy:1000": "node src/simulation/run-simulation.js 1000 4 ambition"
+    "simulate:strategy:1000": "node src/simulation/run-simulation.js 1000 4 ambition",
+    "diagnose:ambitions": "node src/simulation/run-ambition-stress.js",
+    "diagnose:ambitions:quick": "node src/simulation/run-ambition-stress.js 50"
   }
 }

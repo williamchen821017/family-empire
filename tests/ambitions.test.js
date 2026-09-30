@@ -191,6 +191,40 @@ test("宿願只提供私人獎勵，不參與歷史評定勝負或破除平手",
   );
 });
 
+test("runGame 的 configureGame 測試鉤子可在正式回合開始前固定宿願", () => {
+  const forcedAmbition = {
+    id: "forced-test",
+    title: "測試固定宿願",
+    requirement: { type: "influence", min: 999 },
+    actionWeights: { marriage: 9 },
+  };
+
+  const result = runGame({
+    playerCount: 2,
+    seed: 106,
+    chooseAction: chooseRandomAction,
+    respondToAlliance: respondToAllianceProposal,
+    chooseAmbition: chooseRandomAmbition,
+    chooseInternalCard: chooseRandomInternalCard,
+    chooseRewardCard: chooseRandomRewardCard,
+    shouldRevealAmbition: revealAmbitionWhenComplete,
+    configureGame: ({ game }) => {
+      game.families[0].ambition = {
+        card: forcedAmbition,
+        completed: false,
+        revealed: false,
+        completedRound: null,
+        revealedRound: null,
+      };
+    },
+  });
+
+  assert.equal(
+    result.game.families[0].ambition.card.id,
+    "forced-test",
+  );
+});
+
 test("V0.6 隨機 AI 仍能完整跑到終局", () => {
   const result = runGame({
     playerCount: 4,
