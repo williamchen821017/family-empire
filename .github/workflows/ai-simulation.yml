@@ -1,0 +1,41 @@
+name: AI Simulation Check
+
+on:
+  push:
+    branches:
+      - ai-simulation-v1
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  test-and-simulate:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Show runtime versions
+        run: |
+          node --version
+          npm --version
+
+      - name: Run rule tests
+        run: npm test
+
+      - name: Run 1000 AI games
+        run: npm run simulate:1000 | tee simulation-report.txt
+
+      - name: Upload simulation report
+        uses: actions/upload-artifact@v4
+        with:
+          name: family-empire-simulation-report
+          path: simulation-report.txt
+          retention-days: 14
