@@ -30,12 +30,17 @@ jobs:
       - name: Run rule tests
         run: npm test
 
-      - name: Run 1000 AI games
-        run: npm run simulate:1000 | tee simulation-report.txt
+      - name: Run 1000 random AI games
+        run: npm run simulate:1000 | tee simulation-report-random.txt
 
-      - name: Upload simulation report
+      - name: Run 1000 ambition-driven AI games
+        run: npm run simulate:strategy:1000 | tee simulation-report-strategy.txt
+
+      - name: Upload simulation reports
         uses: actions/upload-artifact@v4
         with:
-          name: family-empire-simulation-report
-          path: simulation-report.txt
+          name: family-empire-simulation-reports
+          path: |
+            simulation-report-random.txt
+            simulation-report-strategy.txt
           retention-days: 14

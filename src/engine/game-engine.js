@@ -1,5 +1,19 @@
 import { createOfficeBoard } from "../data/offices.js";
 import { createTaskDeck } from "../data/tasks.js";
+import { createAmbitionDeck } from "../data/ambitions.js";
+import { createHandDeck } from "../data/cards.js";
+import {
+  drawHandCards,
+  drawRewardCardChoice,
+  enforceHandLimit,
+  getPlayableInternalCards,
+  playInternalCard,
+} from "./hand-cards.js";
+import {
+  assignFamilyAmbitions,
+  revealCompletedAmbition,
+  updateAmbitionCompletion,
+} from "./ambitions.js";
 import { createIndustryDeck, INDUSTRY_REGIONS } from "../data/industries.js";
 import {
   advanceLifeStage,
@@ -210,6 +224,12 @@ function createFamily(id, name, familyIndex) {
       retainers: 0,
     },
     members: createMembers(id, familyIndex),
+    hand: [],
+    ambition: null,
+    roundEffects: {
+      taskAbilityBonus: 0,
+      officeAbilityBonus: 0,
+    },
     industryCapacity: 3,
     industryContracts: [],
     localAccessRegions: new Set(),
@@ -230,6 +250,7 @@ function createFamily(id, name, familyIndex) {
       externalMarriageFamilies: new Set(),
       industries: 0,
       localRegions: new Set(),
+      actionCounts: {},
     },
   };
 }
@@ -277,7 +298,11 @@ function fillPublicIndustries(game) {
   }
 }
 
-export function createGame({ playerCount = 4, seed = 1 } = {}) {
+export function createGame({
+  playerCount = 4,
+  seed = 1,
+  chooseAmbition,
+} = {}) {
   if (playerCount < 2 || playerCount > 5) {
     throw new Error("playerCount 必須介於 2 到 5。");
   }
@@ -304,6 +329,10 @@ export function createGame({ playerCount = 4, seed = 1 } = {}) {
     industryDeck: createIndustryDeck(rng),
     publicIndustries: [],
     industryDiscard: [],
+    ambitionDeck: createAmbitionDeck(rng),
+    ambitionDiscard: [],
+    handDeck: createHandDeck(rng),
+    handDiscard: [],
     families,
     familyRelations: createFamilyRelations(families),
     marriages: [],
@@ -315,6 +344,12 @@ export function createGame({ playerCount = 4, seed = 1 } = {}) {
 
   fillPublicTasks(game);
   fillPublicIndustries(game);
+
+  for (const family of families) {
+    drawHandCards(game, family, 3);
+  }
+
+  assignFamilyAmbitions(game, chooseAmbition);
   startRound(game);
 
   return game;
@@ -358,6 +393,8 @@ export function startRound(game) {
     family.actionEconomy.remaining =
       family.actionEconomy.baseActions + family.actionEconomy.extraActions;
     family.actionEconomy.extraActions = 0;
+    family.roundEffects.taskAbilityBonus = 0;
+    family.roundEffects.officeAbilityBonus = 0;
   }
 
   for (const relation of game.familyRelations.values()) {
@@ -690,7 +727,12 @@ function applySeekOffice(game, family, action) {
   member.actedThisRound = true;
 
   const die = rollD6(game);
-  const result = resolveAbilityRoll(member.abilities.君心, die);
+  const effectiveAbility = Math.min(
+    5,
+    member.abilities.君心 + family.roundEffects.officeAbilityBonus,
+  );
+  family.roundEffects.officeAbilityBonus = 0;
+  const result = resolveAbilityRoll(effectiveAbility, die);
 
   if (!isSuccess(result)) {
     return { die, result, success: false };
@@ -788,8 +830,11 @@ function applyTask(game, family, action) {
   const baseAbility = member.abilities[task.ability];
   const effectiveAbility = Math.min(
     5,
-    baseAbility + assistanceResult.abilityBonus,
+    baseAbility +
+      assistanceResult.abilityBonus +
+      family.roundEffects.taskAbilityBonus,
   );
+  family.roundEffects.taskAbilityBonus = 0;
   const result = resolveAbilityRoll(effectiveAbility, die);
 
   game.publicTasks.splice(taskIndex, 1);
@@ -1254,6 +1299,8 @@ export function applyAction(game, family, action) {
   }
 
   spendAction(family);
+  family.stats.actionCounts[action.type] =
+    (family.stats.actionCounts[action.type] ?? 0) + 1;
 
   switch (action.type) {
     case ACTIONS.SEEK_OFFICE:
@@ -1388,11 +1435,66 @@ export function determineWinners(families) {
   };
 }
 
+function runFamilyInternalOperations(
+  game,
+  family,
+  chooseInternalCard,
+) {
+  drawHandCards(game, family, 1);
+
+  const playableCards = getPlayableInternalCards(family);
+
+  if (playableCards.length && typeof chooseInternalCard === "function") {
+    const selected = chooseInternalCard({
+      game,
+      family,
+      playableCards,
+      rng: game.rng,
+    });
+
+    if (selected?.instanceId) {
+      playInternalCard(game, family, selected.instanceId);
+    }
+  }
+
+  enforceHandLimit(game, family);
+}
+
+function updateAndMaybeRevealAmbition(
+  game,
+  family,
+  shouldRevealAmbition,
+  chooseRewardCard,
+) {
+  const completed = updateAmbitionCompletion(game, family);
+  if (!completed || family.ambition.revealed) return false;
+
+  const reveal =
+    typeof shouldRevealAmbition === "function"
+      ? shouldRevealAmbition({ game, family, rng: game.rng })
+      : false;
+
+  if (!reveal) return false;
+
+  const revealed = revealCompletedAmbition(
+    game,
+    family,
+    drawRewardCardChoice,
+    chooseRewardCard,
+  );
+  enforceHandLimit(game, family);
+  return revealed;
+}
+
 export function runGame({
   playerCount = 4,
   seed = 1,
   chooseAction,
   respondToAlliance,
+  chooseAmbition,
+  chooseInternalCard,
+  chooseRewardCard,
+  shouldRevealAmbition,
 } = {}) {
   if (typeof chooseAction !== "function") {
     throw new Error("runGame 需要 chooseAction 函式。");
@@ -1403,10 +1505,28 @@ export function runGame({
       ? respondToAlliance
       : () => false;
 
-  const game = createGame({ playerCount, seed });
+  const game = createGame({
+    playerCount,
+    seed,
+    chooseAmbition,
+  });
 
   while (!game.ended) {
     drawWorldEvents(game, 2);
+
+    for (const family of game.families) {
+      runFamilyInternalOperations(
+        game,
+        family,
+        chooseInternalCard,
+      );
+      updateAndMaybeRevealAmbition(
+        game,
+        family,
+        shouldRevealAmbition,
+        chooseRewardCard,
+      );
+    }
 
     let familiesWithActions = true;
 
@@ -1431,6 +1551,13 @@ export function runGame({
         }
 
         const actionResult = applyAction(game, family, action);
+
+        updateAndMaybeRevealAmbition(
+          game,
+          family,
+          shouldRevealAmbition,
+          chooseRewardCard,
+        );
 
         if (actionResult?.pendingDecision?.type === "allianceProposal") {
           const proposer = familyById(
@@ -1460,6 +1587,16 @@ export function runGame({
 
     settleIndustryIncome(game);
     processEndOfRoundLife(game);
+
+    for (const family of game.families) {
+      updateAndMaybeRevealAmbition(
+        game,
+        family,
+        shouldRevealAmbition,
+        chooseRewardCard,
+      );
+      enforceHandLimit(game, family);
+    }
 
     if (game.finalRound || game.eventDeck.length === 0) {
       game.ended = true;
@@ -1511,5 +1648,9 @@ export function familySnapshot(family) {
     industries: family.industryContracts.length,
     industryCapacity: family.industryCapacity,
     localRegions: family.stats.localRegions.size,
+    handSize: family.hand.length,
+    ambition: family.ambition?.card?.title ?? null,
+    ambitionCompleted: family.ambition?.completed ?? false,
+    ambitionRevealed: family.ambition?.revealed ?? false,
   };
 }

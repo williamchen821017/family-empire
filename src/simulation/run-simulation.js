@@ -1,7 +1,19 @@
 import {
   chooseRandomAction,
+  chooseRandomAmbition,
+  chooseRandomInternalCard,
+  chooseRandomRewardCard,
   respondToAllianceProposal,
+  revealAmbitionWhenComplete as revealRandomAmbition,
 } from "../ai/random-ai.js";
+import {
+  chooseAmbitionDrivenAction,
+  chooseAmbitionFromCandidates,
+  chooseInternalCardByAmbition,
+  chooseRewardCardByAmbition,
+  respondToAllianceByAmbition,
+  revealAmbitionWhenComplete as revealDrivenAmbition,
+} from "../ai/ambition-ai.js";
 import {
   familySnapshot,
   relationSnapshot,
@@ -15,6 +27,26 @@ function toPositiveInteger(value, fallback) {
 
 const gameCount = toPositiveInteger(process.argv[2], 1);
 const playerCount = toPositiveInteger(process.argv[3], 4);
+const aiMode = process.argv[4] === "ambition" ? "ambition" : "random";
+
+const aiPolicy =
+  aiMode === "ambition"
+    ? {
+        chooseAction: chooseAmbitionDrivenAction,
+        chooseAmbition: chooseAmbitionFromCandidates,
+        chooseInternalCard: chooseInternalCardByAmbition,
+        chooseRewardCard: chooseRewardCardByAmbition,
+        respondToAlliance: respondToAllianceByAmbition,
+        shouldRevealAmbition: revealDrivenAmbition,
+      }
+    : {
+        chooseAction: chooseRandomAction,
+        chooseAmbition: chooseRandomAmbition,
+        chooseInternalCard: chooseRandomInternalCard,
+        chooseRewardCard: chooseRandomRewardCard,
+        respondToAlliance: respondToAllianceProposal,
+        shouldRevealAmbition: revealRandomAmbition,
+      };
 
 const winCounts = new Map();
 const evaluationCounts = new Map();
@@ -28,14 +60,21 @@ let depthTotal = 0;
 let relationCountTotal = 0;
 let industryTotal = 0;
 let localRegionTotal = 0;
+const ambitionAssigned = new Map();
+const ambitionCompleted = new Map();
+const actionCounts = new Map();
 
 for (let index = 0; index < gameCount; index += 1) {
   const seed = 1000 + index;
   const { game, outcome } = runGame({
     playerCount,
     seed,
-    chooseAction: chooseRandomAction,
-    respondToAlliance: respondToAllianceProposal,
+    chooseAction: aiPolicy.chooseAction,
+    respondToAlliance: aiPolicy.respondToAlliance,
+    chooseAmbition: aiPolicy.chooseAmbition,
+    chooseInternalCard: aiPolicy.chooseInternalCard,
+    chooseRewardCard: aiPolicy.chooseRewardCard,
+    shouldRevealAmbition: aiPolicy.shouldRevealAmbition,
   });
 
   roundTotal += game.round;
@@ -57,6 +96,30 @@ for (let index = 0; index < gameCount; index += 1) {
     (sum, family) => sum + family.stats.localRegions.size,
     0,
   );
+
+  for (const family of game.families) {
+    const ambitionId = family.ambition?.card?.id ?? "none";
+    ambitionAssigned.set(
+      ambitionId,
+      (ambitionAssigned.get(ambitionId) ?? 0) + 1,
+    );
+
+    if (family.ambition?.completed) {
+      ambitionCompleted.set(
+        ambitionId,
+        (ambitionCompleted.get(ambitionId) ?? 0) + 1,
+      );
+    }
+
+    for (const [actionType, count] of Object.entries(
+      family.stats.actionCounts,
+    )) {
+      actionCounts.set(
+        actionType,
+        (actionCounts.get(actionType) ?? 0) + count,
+      );
+    }
+  }
 
   if (outcome.winners.length > 1) sharedWinGames += 1;
 
@@ -80,7 +143,8 @@ for (let index = 0; index < gameCount; index += 1) {
   }
 
   if (gameCount === 1) {
-    console.log("《家族天下》AI 試跑 V0.5｜產業契券與鄉里勢力正式化");
+    console.log("《家族天下》AI 試跑 V0.6｜宿願、手牌與策略 AI");
+    console.log(`AI 模式：${aiMode === "ambition" ? "宿願導向" : "隨機"}`);
     console.log(`Seed：${seed}`);
     console.log(`玩家數：${playerCount}`);
     console.log(`終局回合：第 ${game.round} 回合`);
@@ -119,7 +183,8 @@ for (let index = 0; index < gameCount; index += 1) {
 }
 
 if (gameCount > 1) {
-  console.log(`《家族天下》AI 批次試跑 V0.5：${gameCount} 局`);
+  console.log(`《家族天下》AI 批次試跑 V0.6：${gameCount} 局`);
+  console.log(`AI 模式：${aiMode === "ambition" ? "宿願導向" : "隨機"}`);
   console.log(`玩家數：${playerCount}`);
   console.log(`平均終局回合：${(roundTotal / gameCount).toFixed(2)}`);
   console.log(`平均每局婚姻：${(marriageTotal / gameCount).toFixed(2)} 對`);
@@ -150,6 +215,23 @@ if (gameCount > 1) {
     console.log(
       `- ${reason}：${count} 次（${((count / gameCount) * 100).toFixed(1)}%）`,
     );
+  }
+
+  console.log("");
+  console.log("宿願完成率：");
+  for (const [ambitionId, assigned] of [...ambitionAssigned.entries()].sort()) {
+    const completed = ambitionCompleted.get(ambitionId) ?? 0;
+    console.log(
+      `- ${ambitionId}：${((completed / assigned) * 100).toFixed(1)}%（${completed}/${assigned}）`,
+    );
+  }
+
+  console.log("");
+  console.log("主要行動使用量：");
+  for (const [actionType, count] of [...actionCounts.entries()].sort(
+    (a, b) => b[1] - a[1],
+  )) {
+    console.log(`- ${actionType}：${count}`);
   }
 
   console.log("");

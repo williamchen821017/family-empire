@@ -7,6 +7,8 @@
     "test": "node --test",
     "simulate": "node src/simulation/run-simulation.js",
     "simulate:100": "node src/simulation/run-simulation.js 100",
-    "simulate:1000": "node src/simulation/run-simulation.js 1000"
+    "simulate:1000": "node src/simulation/run-simulation.js 1000",
+    "simulate:strategy": "node src/simulation/run-simulation.js 1 4 ambition",
+    "simulate:strategy:1000": "node src/simulation/run-simulation.js 1000 4 ambition"
   }
 }
