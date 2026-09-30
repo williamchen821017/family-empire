@@ -1,5 +1,10 @@
 import { createOfficeBoard } from "../data/offices.js";
 import { createTaskDeck } from "../data/tasks.js";
+import {
+  advanceLifeStage,
+  fertilitySuccess,
+  isMarriageable,
+} from "../data/life-cycle.js";
 
 export const FAMILY_NAMES = [
   "清河崔氏",
@@ -21,6 +26,7 @@ export const ACTION_CATEGORIES = Object.freeze([
 export const ACTIONS = Object.freeze({
   SEEK_OFFICE: "seek_office",
   TAKE_TASK: "take_task",
+  MARRIAGE: "marriage",
   GATHER_MONEY: "gather_money",
   GATHER_FOOD: "gather_food",
 });
@@ -125,39 +131,64 @@ function createEventDeck(rng) {
   return [...upper, ...lower];
 }
 
-function createMembers(familyId) {
+function createMember({
+  id,
+  generation,
+  sex,
+  lifeStage,
+  abilities,
+  bornRound = null,
+}) {
+  return {
+    id,
+    generation,
+    sex,
+    lifeStage,
+    turnsInStage: 0,
+    adult:
+      lifeStage === "成年" ||
+      lifeStage === "壯年" ||
+      lifeStage === "老年",
+    alive: true,
+    actedThisRound: false,
+    currentOfficeId: null,
+    marriageId: null,
+    spouseRef: null,
+    parentRefs: [],
+    bornRound,
+    abilities,
+  };
+}
+
+function createMembers(familyId, familyIndex) {
+  const thirdSex = familyIndex % 2 === 0 ? "男" : "女";
+
   return [
-    {
+    createMember({
       id: `${familyId}-g1-a`,
       generation: 1,
-      adult: true,
-      alive: true,
-      actedThisRound: false,
-      currentOfficeId: null,
+      sex: "男",
+      lifeStage: "壯年",
       abilities: { 武略: 3, 政務: 4, 君心: 2, 交際: 3, 名望: 3 },
-    },
-    {
+    }),
+    createMember({
       id: `${familyId}-g1-b`,
       generation: 1,
-      adult: true,
-      alive: true,
-      actedThisRound: false,
-      currentOfficeId: null,
+      sex: "女",
+      lifeStage: "成年",
       abilities: { 武略: 2, 政務: 3, 君心: 4, 交際: 3, 名望: 3 },
-    },
-    {
+    }),
+    createMember({
       id: `${familyId}-g2-a`,
       generation: 2,
-      adult: true,
-      alive: true,
-      actedThisRound: false,
-      currentOfficeId: null,
+      sex: thirdSex,
+      lifeStage: "成年",
       abilities: { 武略: 3, 政務: 2, 君心: 3, 交際: 4, 名望: 4 },
-    },
+    }),
   ];
 }
 
-function createFamily(id, name) {
+function createFamily(id, name, familyIndex) {
   return {
     id,
     name,
@@ -168,7 +199,7 @@ function createFamily(id, name) {
       households: 0,
       retainers: 0,
     },
-    members: createMembers(id),
+    members: createMembers(id, familyIndex),
     actionEconomy: {
       baseActions: BASE_ACTIONS_PER_ROUND,
       extraActions: 0,
@@ -190,6 +221,34 @@ function createFamily(id, name) {
   };
 }
 
+function relationKey(familyAId, familyBId) {
+  return [familyAId, familyBId].sort().join("::");
+}
+
+function createFamilyRelations(families) {
+  const relations = new Map();
+
+  for (let i = 0; i < families.length; i += 1) {
+    for (let j = i + 1; j < families.length; j += 1) {
+      const familyA = families[i];
+      const familyB = families[j];
+      relations.set(relationKey(familyA.id, familyB.id), {
+        familyAId: familyA.id,
+        familyBId: familyB.id,
+        depth: 0,
+        marriages: 0,
+        alliance: false,
+      });
+    }
+  }
+
+  return relations;
+}
+
+export function getFamilyRelation(game, familyAId, familyBId) {
+  return game.familyRelations.get(relationKey(familyAId, familyBId)) ?? null;
+}
+
 function fillPublicTasks(game) {
   while (
     game.publicTasks.length < PUBLIC_TASK_SLOTS &&
@@ -206,7 +265,7 @@ export function createGame({ playerCount = 4, seed = 1 } = {}) {
 
   const rng = createSeededRng(seed);
   const families = FAMILY_NAMES.slice(0, playerCount).map((name, index) =>
-    createFamily(`family-${index + 1}`, name),
+    createFamily(`family-${index + 1}`, name, index),
   );
 
   const game = {
@@ -224,6 +283,10 @@ export function createGame({ playerCount = 4, seed = 1 } = {}) {
     publicTasks: [],
     taskDiscard: [],
     families,
+    familyRelations: createFamilyRelations(families),
+    marriages: [],
+    nextMarriageNumber: 1,
+    nextChildNumber: 1,
     log: [],
   };
 
@@ -371,12 +434,45 @@ function getTaskActions(game, family) {
   return actions;
 }
 
+function getMarriageActions(game, family) {
+  const actions = [];
+  const ownCandidates = family.members.filter(
+    (member) => memberCanAct(member) && isMarriageable(member),
+  );
+
+  for (const ownMember of ownCandidates) {
+    for (const targetFamily of game.families) {
+      if (targetFamily.id === family.id) continue;
+
+      const targetMembers = targetFamily.members.filter(
+        (member) =>
+          isMarriageable(member) &&
+          !member.actedThisRound &&
+          member.sex !== ownMember.sex,
+      );
+
+      for (const targetMember of targetMembers) {
+        actions.push({
+          type: ACTIONS.MARRIAGE,
+          category: "聯姻",
+          actorId: ownMember.id,
+          targetFamilyId: targetFamily.id,
+          targetMemberId: targetMember.id,
+        });
+      }
+    }
+  }
+
+  return actions;
+}
+
 export function getLegalActions(game, family) {
   if (family.actionEconomy.remaining <= 0) return [];
 
   return [
     ...getOfficeActions(game, family),
     ...getTaskActions(game, family),
+    ...getMarriageActions(game, family),
     {
       type: ACTIONS.GATHER_MONEY,
       category: "家族",
@@ -390,6 +486,10 @@ export function getLegalActions(game, family) {
 
 function findMember(family, memberId) {
   return family.members.find((member) => member.id === memberId) ?? null;
+}
+
+function familyById(game, familyId) {
+  return game.families.find((family) => family.id === familyId) ?? null;
 }
 
 function spendAction(family) {
@@ -488,6 +588,82 @@ function applyTask(game, family, action) {
   };
 }
 
+function applyMarriage(game, family, action) {
+  const ownMember = findMember(family, action.actorId);
+  const targetFamily = familyById(game, action.targetFamilyId);
+  const targetMember = targetFamily
+    ? findMember(targetFamily, action.targetMemberId)
+    : null;
+
+  if (
+    !ownMember ||
+    !targetFamily ||
+    !targetMember ||
+    !memberCanAct(ownMember) ||
+    !isMarriageable(ownMember) ||
+    !isMarriageable(targetMember) ||
+    targetMember.actedThisRound ||
+    ownMember.sex === targetMember.sex
+  ) {
+    throw new Error("這次聯姻已不是合法行動。");
+  }
+
+  const marriageNumber = game.nextMarriageNumber;
+  game.nextMarriageNumber += 1;
+  const marriageId = `marriage-${marriageNumber}`;
+  const markerId = `姻${String(marriageNumber).padStart(2, "0")}`;
+
+  ownMember.marriageId = marriageId;
+  targetMember.marriageId = marriageId;
+  ownMember.spouseRef = {
+    familyId: targetFamily.id,
+    memberId: targetMember.id,
+  };
+  targetMember.spouseRef = {
+    familyId: family.id,
+    memberId: ownMember.id,
+  };
+  ownMember.actedThisRound = true;
+  targetMember.actedThisRound = true;
+
+  const male =
+    ownMember.sex === "男"
+      ? { familyId: family.id, memberId: ownMember.id }
+      : { familyId: targetFamily.id, memberId: targetMember.id };
+  const female =
+    ownMember.sex === "女"
+      ? { familyId: family.id, memberId: ownMember.id }
+      : { familyId: targetFamily.id, memberId: targetMember.id };
+
+  game.marriages.push({
+    id: marriageId,
+    markerId,
+    spouseA: { familyId: family.id, memberId: ownMember.id },
+    spouseB: { familyId: targetFamily.id, memberId: targetMember.id },
+    male,
+    female,
+    establishedRound: game.round,
+    children: [],
+    active: true,
+  });
+
+  family.stats.externalMarriageFamilies.add(targetFamily.id);
+  targetFamily.stats.externalMarriageFamilies.add(family.id);
+  family.resources.influence += 1;
+  targetFamily.resources.influence += 1;
+
+  const relation = getFamilyRelation(game, family.id, targetFamily.id);
+  relation.marriages += 1;
+  relation.depth = Math.min(5, relation.depth + 1);
+
+  return {
+    success: true,
+    marriageId,
+    markerId,
+    targetFamilyId: targetFamily.id,
+  };
+}
+
 export function applyAction(game, family, action) {
   const legal = getLegalActions(game, family).some(
     (candidate) => JSON.stringify(candidate) === JSON.stringify(action),
@@ -504,6 +680,8 @@ export function applyAction(game, family, action) {
       return applySeekOffice(game, family, action);
     case ACTIONS.TAKE_TASK:
       return applyTask(game, family, action);
+    case ACTIONS.MARRIAGE:
+      return applyMarriage(game, family, action);
     case ACTIONS.GATHER_MONEY:
       family.resources.money += 1;
       return { success: true };
@@ -513,6 +691,88 @@ export function applyAction(game, family, action) {
     default:
       throw new Error(`未知行動：${action.type}`);
   }
+}
+
+export function processBirths(game) {
+  const births = [];
+
+  for (const marriage of game.marriages) {
+    if (!marriage.active) continue;
+    if (marriage.children.length >= 3) continue;
+    if (game.round <= marriage.establishedRound) continue;
+
+    const fatherFamily = familyById(game, marriage.male.familyId);
+    const motherFamily = familyById(game, marriage.female.familyId);
+    const father = fatherFamily
+      ? findMember(fatherFamily, marriage.male.memberId)
+      : null;
+    const mother = motherFamily
+      ? findMember(motherFamily, marriage.female.memberId)
+      : null;
+
+    if (!father?.alive || !mother?.alive) continue;
+
+    const die = rollD6(game);
+    if (!fertilitySuccess(mother.lifeStage, die)) continue;
+
+    const childNumber = game.nextChildNumber;
+    game.nextChildNumber += 1;
+    const childId = `${fatherFamily.id}-child-${childNumber}`;
+    const childSex = game.rng() < 0.5 ? "男" : "女";
+
+    const child = createMember({
+      id: childId,
+      generation: father.generation + 1,
+      sex: childSex,
+      lifeStage: "小孩",
+      abilities: { 武略: 1, 政務: 1, 君心: 1, 交際: 1, 名望: 1 },
+      bornRound: game.round,
+    });
+    child.parentRefs = [
+      { familyId: fatherFamily.id, memberId: father.id, role: "父" },
+      { familyId: motherFamily.id, memberId: mother.id, role: "母" },
+    ];
+
+    fatherFamily.members.push(child);
+    fatherFamily.stats.births += 1;
+    fatherFamily.stats.livingDescendants += 1;
+    motherFamily.resources.influence += 1;
+
+    marriage.children.push({
+      familyId: fatherFamily.id,
+      memberId: child.id,
+    });
+
+    const relation = getFamilyRelation(
+      game,
+      fatherFamily.id,
+      motherFamily.id,
+    );
+    relation.depth = Math.min(5, relation.depth + 1);
+
+    births.push({
+      marriageId: marriage.id,
+      childFamilyId: fatherFamily.id,
+      childId: child.id,
+      fatherFamilyId: fatherFamily.id,
+      motherFamilyId: motherFamily.id,
+      die,
+    });
+  }
+
+  return births;
+}
+
+export function processEndOfRoundLife(game) {
+  const births = processBirths(game);
+
+  for (const family of game.families) {
+    for (const member of family.members) {
+      advanceLifeStage(member, game.round);
+    }
+  }
+
+  return births;
 }
 
 export function evaluateFamily(family) {
@@ -582,6 +842,8 @@ export function runGame({
       }
     }
 
+    processEndOfRoundLife(game);
+
     if (game.finalRound || game.eventDeck.length === 0) {
       game.ended = true;
       if (!game.endReason) {
@@ -609,13 +871,15 @@ export function familySnapshot(family) {
     money: family.resources.money,
     food: family.resources.food,
     influence: family.resources.influence,
+    familyMembers: family.members.length,
+    births: family.stats.births,
+    livingDescendants: family.stats.livingDescendants,
+    marriageFamilies: family.stats.externalMarriageFamilies.size,
     officials: family.stats.officeCharacterIds.size,
     currentOfficials: family.stats.currentOfficeCharacterIds.size,
     keyOfficials: family.stats.keyOfficeCharacterIds.size,
     completedTasks: family.history.completedTasks.length,
     greatTasks: family.history.completedTasks.filter((task) => task.major).length,
-    births: family.stats.births,
-    marriageFamilies: family.stats.externalMarriageFamilies.size,
     industries: family.stats.industries,
     localRegions: family.stats.localRegions.size,
   };

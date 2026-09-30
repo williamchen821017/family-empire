@@ -5,15 +5,17 @@ import { chooseRandomAction } from "../src/ai/random-ai.js";
 import {
   ABILITY_RESULT_TABLE,
   ACTIONS,
+  applyAction,
   createGame,
   determineWinners,
   evaluateFamily,
+  getFamilyRelation,
   getLegalActions,
   grantExtraAction,
+  processBirths,
   resolveAbilityRoll,
   runGame,
   startRound,
-  applyAction,
 } from "../src/engine/game-engine.js";
 
 function makeFamily(overrides = {}) {
@@ -23,8 +25,10 @@ function makeFamily(overrides = {}) {
       generation: 1,
       adult: true,
       alive: true,
+      lifeStage: "成年",
       actedThisRound: false,
       currentOfficeId: null,
+      marriageId: null,
       abilities: { 武略: 3, 政務: 3, 君心: 3, 交際: 3, 名望: 3 },
     },
     {
@@ -32,8 +36,10 @@ function makeFamily(overrides = {}) {
       generation: 2,
       adult: true,
       alive: true,
+      lifeStage: "成年",
       actedThisRound: false,
       currentOfficeId: null,
+      marriageId: null,
       abilities: { 武略: 3, 政務: 3, 君心: 3, 交際: 3, 名望: 3 },
     },
     {
@@ -41,8 +47,10 @@ function makeFamily(overrides = {}) {
       generation: 2,
       adult: true,
       alive: true,
+      lifeStage: "成年",
       actedThisRound: false,
       currentOfficeId: null,
+      marriageId: null,
       abilities: { 武略: 3, 政務: 3, 君心: 3, 交際: 3, 名望: 3 },
     },
   ];
@@ -165,6 +173,133 @@ test("成功任務會進入家史；失敗任務才進棄牌", () => {
   assert.equal(family.history.completedTasks.length, 1);
   assert.equal(game.taskDiscard.length, beforeDiscard);
   assert.equal(game.publicTasks.length, 3);
+});
+
+test("跨家族聯姻後，雙方人物使用同一組婚姻標記", () => {
+  const game = createGame({ playerCount: 2, seed: 6 });
+  const family = game.families[0];
+
+  const marriageAction = getLegalActions(game, family).find(
+    (action) => action.type === ACTIONS.MARRIAGE,
+  );
+
+  assert.ok(marriageAction);
+  const result = applyAction(game, family, marriageAction);
+  const marriage = game.marriages.find(
+    (item) => item.id === result.marriageId,
+  );
+  const ownMember = family.members.find(
+    (member) => member.id === marriageAction.actorId,
+  );
+  const targetFamily = game.families.find(
+    (item) => item.id === marriageAction.targetFamilyId,
+  );
+  const targetMember = targetFamily.members.find(
+    (member) => member.id === marriageAction.targetMemberId,
+  );
+
+  assert.equal(ownMember.marriageId, marriage.id);
+  assert.equal(targetMember.marriageId, marriage.id);
+  assert.equal(marriage.markerId, "姻01");
+
+  const relation = getFamilyRelation(
+    game,
+    family.id,
+    targetFamily.id,
+  );
+  assert.equal(relation.depth, 1);
+  assert.equal(relation.marriages, 1);
+});
+
+test("子嗣歸父族，並保留父母雙方的族譜連結", () => {
+  const game = createGame({ playerCount: 2, seed: 7 });
+  const initiatingFamily = game.families[0];
+
+  const marriageAction = getLegalActions(game, initiatingFamily).find(
+    (action) => {
+      if (action.type !== ACTIONS.MARRIAGE) return false;
+      const own = initiatingFamily.members.find(
+        (member) => member.id === action.actorId,
+      );
+      return own.sex === "男";
+    },
+  );
+
+  assert.ok(marriageAction);
+  const marriageResult = applyAction(
+    game,
+    initiatingFamily,
+    marriageAction,
+  );
+  const marriage = game.marriages.find(
+    (item) => item.id === marriageResult.marriageId,
+  );
+  const fatherFamily = game.families.find(
+    (family) => family.id === marriage.male.familyId,
+  );
+  const motherFamily = game.families.find(
+    (family) => family.id === marriage.female.familyId,
+  );
+  const motherInfluenceBefore = motherFamily.resources.influence;
+
+  game.round = marriage.establishedRound + 1;
+  const originalRng = game.rng;
+  const values = [0.9999, 0.1];
+  game.rng = () => values.shift() ?? 0.1;
+
+  const births = processBirths(game);
+
+  game.rng = originalRng;
+
+  assert.equal(births.length, 1);
+  assert.equal(fatherFamily.stats.births, 1);
+
+  const child = fatherFamily.members.find(
+    (member) => member.id === births[0].childId,
+  );
+
+  assert.ok(child);
+  assert.equal(child.parentRefs.length, 2);
+  assert.equal(
+    child.parentRefs.find((ref) => ref.role === "父").familyId,
+    fatherFamily.id,
+  );
+  assert.equal(
+    child.parentRefs.find((ref) => ref.role === "母").familyId,
+    motherFamily.id,
+  );
+  assert.equal(
+    motherFamily.resources.influence,
+    motherInfluenceBefore + 1,
+  );
+
+  const relation = getFamilyRelation(
+    game,
+    fatherFamily.id,
+    motherFamily.id,
+  );
+  assert.equal(relation.depth, 2);
+});
+
+test("同一對夫婦最多只有 3 名進入遊戲的子女", () => {
+  const game = createGame({ playerCount: 2, seed: 8 });
+  const family = game.families[0];
+  const marriageAction = getLegalActions(game, family).find(
+    (action) => action.type === ACTIONS.MARRIAGE,
+  );
+
+  const marriageResult = applyAction(game, family, marriageAction);
+  const marriage = game.marriages.find(
+    (item) => item.id === marriageResult.marriageId,
+  );
+
+  for (let round = 2; round <= 8; round += 1) {
+    game.round = round;
+    game.rng = () => 0.9999;
+    processBirths(game);
+  }
+
+  assert.equal(marriage.children.length, 3);
 });
 
 test("達成五項條件時，應取得五項歷史評定", () => {
