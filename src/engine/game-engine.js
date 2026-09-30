@@ -1,5 +1,6 @@
 import { createOfficeBoard } from "../data/offices.js";
 import { createTaskDeck } from "../data/tasks.js";
+import { createIndustryDeck, INDUSTRY_REGIONS } from "../data/industries.js";
 import {
   advanceLifeStage,
   fertilitySuccess,
@@ -33,6 +34,8 @@ export const ACTIONS = Object.freeze({
   TAKE_TASK: "take_task",
   MARRIAGE: "marriage",
   PROPOSE_ALLIANCE: "propose_alliance",
+  ACQUIRE_INDUSTRY: "acquire_industry",
+  ESTABLISH_LOCAL_POWER: "establish_local_power",
   GATHER_MONEY: "gather_money",
   GATHER_FOOD: "gather_food",
 });
@@ -40,6 +43,7 @@ export const ACTIONS = Object.freeze({
 export const BASE_ACTIONS_PER_ROUND = 3;
 export const MAX_EXTRA_ACTIONS = 2;
 export const PUBLIC_TASK_SLOTS = 3;
+export const PUBLIC_INDUSTRY_SLOTS = 3;
 
 export const ABILITY_RESULT_TABLE = Object.freeze({
   1: ["fail", "fail", "fail", "fail", "success", "success"],
@@ -83,7 +87,7 @@ export const HISTORICAL_EVALUATIONS = Object.freeze([
     id: "rich_estates",
     name: "家產豐富",
     check: (family) =>
-      family.stats.industries >= 3 && family.stats.localRegions.size >= 2,
+      family.industryContracts.length >= 3 && family.stats.localRegions.size >= 2,
   },
   {
     id: "great_merit",
@@ -206,6 +210,9 @@ function createFamily(id, name, familyIndex) {
       retainers: 0,
     },
     members: createMembers(id, familyIndex),
+    industryCapacity: 3,
+    industryContracts: [],
+    localAccessRegions: new Set(),
     actionEconomy: {
       baseActions: BASE_ACTIONS_PER_ROUND,
       extraActions: 0,
@@ -261,6 +268,15 @@ function fillPublicTasks(game) {
   }
 }
 
+function fillPublicIndustries(game) {
+  while (
+    game.publicIndustries.length < PUBLIC_INDUSTRY_SLOTS &&
+    game.industryDeck.length > 0
+  ) {
+    game.publicIndustries.push(game.industryDeck.shift());
+  }
+}
+
 export function createGame({ playerCount = 4, seed = 1 } = {}) {
   if (playerCount < 2 || playerCount > 5) {
     throw new Error("playerCount 必須介於 2 到 5。");
@@ -285,6 +301,9 @@ export function createGame({ playerCount = 4, seed = 1 } = {}) {
     taskDeck: createTaskDeck(rng),
     publicTasks: [],
     taskDiscard: [],
+    industryDeck: createIndustryDeck(rng),
+    publicIndustries: [],
+    industryDiscard: [],
     families,
     familyRelations: createFamilyRelations(families),
     marriages: [],
@@ -295,6 +314,7 @@ export function createGame({ playerCount = 4, seed = 1 } = {}) {
   };
 
   fillPublicTasks(game);
+  fillPublicIndustries(game);
   startRound(game);
 
   return game;
@@ -541,6 +561,94 @@ function getAllianceActions(game, family) {
     }));
 }
 
+function familyHasRegionalOffice(game, family, region) {
+  return game.officeBoard.some(
+    (office) =>
+      office.region === region &&
+      office.holder?.type === "player" &&
+      office.holder.familyId === family.id,
+  );
+}
+
+function familyHasIndustryInRegion(family, region) {
+  return family.industryContracts.some(
+    (contract) => contract.region === region,
+  );
+}
+
+function hasLocalFoothold(game, family, region) {
+  return (
+    familyHasRegionalOffice(game, family, region) ||
+    familyHasIndustryInRegion(family, region) ||
+    family.localAccessRegions.has(region)
+  );
+}
+
+function canAcquireIndustry(game, family, industry) {
+  if (family.industryContracts.length >= family.industryCapacity) return false;
+
+  const cost = industry.acquisition.cost;
+
+  if (industry.acquisition.type === "funding") {
+    return (
+      family.resources.money >= cost.money &&
+      family.resources.influence >= cost.influence
+    );
+  }
+
+  if (industry.acquisition.type === "office") {
+    return (
+      family.stats.currentOfficeCharacterIds.size >= 1 &&
+      family.resources.money >= cost.money &&
+      family.resources.influence >= cost.influence
+    );
+  }
+
+  if (industry.acquisition.type === "local") {
+    return (
+      family.stats.localRegions.has(industry.region) &&
+      family.resources.money >= cost.money &&
+      family.resources.influence >= cost.influence
+    );
+  }
+
+  return false;
+}
+
+function getIndustryActions(game, family) {
+  return game.publicIndustries
+    .filter((industry) => canAcquireIndustry(game, family, industry))
+    .map((industry) => ({
+      type: ACTIONS.ACQUIRE_INDUSTRY,
+      category: "地方",
+      industryInstanceId: industry.instanceId,
+    }));
+}
+
+function getLocalPowerActions(game, family) {
+  if (family.resources.influence < 1) return [];
+
+  const actions = [];
+
+  for (const member of family.members) {
+    if (!memberCanAct(member)) continue;
+
+    for (const region of INDUSTRY_REGIONS) {
+      if (family.stats.localRegions.has(region)) continue;
+      if (!hasLocalFoothold(game, family, region)) continue;
+
+      actions.push({
+        type: ACTIONS.ESTABLISH_LOCAL_POWER,
+        category: "地方",
+        actorId: member.id,
+        region,
+      });
+    }
+  }
+
+  return actions;
+}
+
 export function getLegalActions(game, family) {
   if (family.actionEconomy.remaining <= 0) return [];
 
@@ -549,6 +657,8 @@ export function getLegalActions(game, family) {
     ...getTaskActions(game, family),
     ...getMarriageActions(game, family),
     ...getAllianceActions(game, family),
+    ...getIndustryActions(game, family),
+    ...getLocalPowerActions(game, family),
     {
       type: ACTIONS.GATHER_MONEY,
       category: "家族",
@@ -938,6 +1048,150 @@ export function provideFamilyAid(
   return { money, food };
 }
 
+function applyAcquireIndustry(game, family, action) {
+  const industryIndex = game.publicIndustries.findIndex(
+    (industry) => industry.instanceId === action.industryInstanceId,
+  );
+  const industry = game.publicIndustries[industryIndex];
+
+  if (!industry || !canAcquireIndustry(game, family, industry)) {
+    throw new Error("這次取得產業契券已不是合法行動。");
+  }
+
+  const cost = industry.acquisition.cost;
+  family.resources.money -= cost.money;
+  family.resources.influence -= cost.influence;
+
+  game.publicIndustries.splice(industryIndex, 1);
+  family.industryContracts.push(industry);
+  family.stats.industries = family.industryContracts.length;
+  fillPublicIndustries(game);
+
+  return {
+    success: true,
+    industryInstanceId: industry.instanceId,
+    industryName: industry.name,
+    region: industry.region,
+  };
+}
+
+function applyEstablishLocalPower(game, family, action) {
+  const member = findMember(family, action.actorId);
+
+  if (
+    !member ||
+    !memberCanAct(member) ||
+    family.resources.influence < 1 ||
+    family.stats.localRegions.has(action.region) ||
+    !hasLocalFoothold(game, family, action.region)
+  ) {
+    throw new Error("這次經營鄉里已不是合法行動。");
+  }
+
+  family.resources.influence -= 1;
+  member.actedThisRound = true;
+
+  const die = rollD6(game);
+  const result = resolveAbilityRoll(member.abilities.政務, die);
+
+  if (isSuccess(result)) {
+    family.stats.localRegions.add(action.region);
+  }
+
+  return {
+    die,
+    result,
+    success: isSuccess(result),
+    region: action.region,
+  };
+}
+
+export function settleIndustryIncome(game) {
+  const settlement = [];
+
+  for (const family of game.families) {
+    let money = 0;
+    let food = 0;
+
+    for (const contract of family.industryContracts) {
+      money += contract.income.money;
+      food += contract.income.food;
+    }
+
+    family.resources.money += money;
+    family.resources.food += food;
+    settlement.push({ familyId: family.id, money, food });
+  }
+
+  return settlement;
+}
+
+export function abandonIndustryContract(game, familyId, contractInstanceId) {
+  const family = familyById(game, familyId);
+  if (!family) throw new Error("找不到要放棄產業的家族。");
+
+  const index = family.industryContracts.findIndex(
+    (contract) => contract.instanceId === contractInstanceId,
+  );
+
+  if (index < 0) {
+    throw new Error("找不到要放棄的產業契券。");
+  }
+
+  const [contract] = family.industryContracts.splice(index, 1);
+  family.stats.industries = family.industryContracts.length;
+  game.industryDiscard.push(contract);
+
+  return contract;
+}
+
+export function transferIndustryContract(
+  game,
+  fromFamilyId,
+  toFamilyId,
+  contractInstanceId,
+) {
+  const from = familyById(game, fromFamilyId);
+  const to = familyById(game, toFamilyId);
+  const relation = getFamilyRelation(game, fromFamilyId, toFamilyId);
+
+  if (!from || !to || from.id === to.id) {
+    throw new Error("資產讓渡的家族資料無效。");
+  }
+
+  if (to.industryContracts.length >= to.industryCapacity) {
+    throw new Error("受讓方沒有空的產業契券欄位。");
+  }
+
+  const index = from.industryContracts.findIndex(
+    (contract) => contract.instanceId === contractInstanceId,
+  );
+  if (index < 0) {
+    throw new Error("讓渡方沒有這張產業契券。");
+  }
+
+  const useFreeTransfer =
+    relation?.depth >= 2 && !relation.roundUsage.freeAssetTransferUsed;
+
+  if (useFreeTransfer) {
+    relation.roundUsage.freeAssetTransferUsed = true;
+  } else {
+    spendAction(from);
+  }
+
+  const [contract] = from.industryContracts.splice(index, 1);
+  to.industryContracts.push(contract);
+  from.stats.industries = from.industryContracts.length;
+  to.stats.industries = to.industryContracts.length;
+
+  return {
+    contractInstanceId,
+    fromFamilyId,
+    toFamilyId,
+    usedFreeTransfer: useFreeTransfer,
+  };
+}
+
 export function markFreeAssetTransferUsed(game, familyAId, familyBId) {
   const relation = getFamilyRelation(game, familyAId, familyBId);
 
@@ -1010,6 +1264,10 @@ export function applyAction(game, family, action) {
       return applyMarriage(game, family, action);
     case ACTIONS.PROPOSE_ALLIANCE:
       return applyAllianceProposal(game, family, action);
+    case ACTIONS.ACQUIRE_INDUSTRY:
+      return applyAcquireIndustry(game, family, action);
+    case ACTIONS.ESTABLISH_LOCAL_POWER:
+      return applyEstablishLocalPower(game, family, action);
     case ACTIONS.GATHER_MONEY:
       family.resources.money += 1;
       return { success: true };
@@ -1200,6 +1458,7 @@ export function runGame({
       }
     }
 
+    settleIndustryIncome(game);
     processEndOfRoundLife(game);
 
     if (game.finalRound || game.eventDeck.length === 0) {
@@ -1249,7 +1508,8 @@ export function familySnapshot(family) {
     keyOfficials: family.stats.keyOfficeCharacterIds.size,
     completedTasks: family.history.completedTasks.length,
     greatTasks: family.history.completedTasks.filter((task) => task.major).length,
-    industries: family.stats.industries,
+    industries: family.industryContracts.length,
+    industryCapacity: family.industryCapacity,
     localRegions: family.stats.localRegions.size,
   };
 }

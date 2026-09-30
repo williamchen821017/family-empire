@@ -8,6 +8,7 @@ import {
 import {
   ABILITY_RESULT_TABLE,
   ACTIONS,
+  abandonIndustryContract,
   applyAction,
   betrayAlliance,
   canDirectHostileAction,
@@ -24,8 +25,10 @@ import {
   resolveAbilityRoll,
   resolveAllianceProposal,
   runGame,
+  settleIndustryIncome,
   shareResourceLoss,
   startRound,
+  transferIndustryContract,
 } from "../src/engine/game-engine.js";
 
 function makeFamily(overrides = {}) {
@@ -76,6 +79,13 @@ function makeFamily(overrides = {}) {
       retainers: 0,
     },
     members,
+    industryCapacity: 3,
+    industryContracts: [
+      { instanceId: "i1", income: { money: 1, food: 0 } },
+      { instanceId: "i2", income: { money: 0, food: 1 } },
+      { instanceId: "i3", income: { money: 1, food: 1 } },
+    ],
+    localAccessRegions: new Set(),
     actionEconomy: {
       baseActions: 3,
       extraActions: 0,
@@ -489,6 +499,167 @@ test("關係 5 的共進退每回合第一次協力不花援助方行動，但�
   assert.equal(helper.actedThisRound, true);
   assert.equal(result.assistance.free, true);
   assert.equal(relation.roundUsage.freeAssistUsed, true);
+});
+
+test("中央產業機會開局固定公開 3 張", () => {
+  const game = createGame({ playerCount: 4, seed: 17 });
+  assert.equal(game.publicIndustries.length, 3);
+});
+
+test("出資型產業會支付成本並取得產業契券", () => {
+  const game = createGame({ playerCount: 2, seed: 18 });
+  const family = game.families[0];
+
+  game.publicIndustries = [
+    {
+      id: "test-estate",
+      instanceId: "test-estate-1",
+      name: "測試田莊",
+      region: "冀州",
+      acquisition: { type: "funding", cost: { money: 2, influence: 0 } },
+      income: { money: 0, food: 2 },
+    },
+  ];
+
+  const action = getLegalActions(game, family).find(
+    (item) =>
+      item.type === ACTIONS.ACQUIRE_INDUSTRY &&
+      item.industryInstanceId === "test-estate-1",
+  );
+
+  assert.ok(action);
+  const moneyBefore = family.resources.money;
+  applyAction(game, family, action);
+
+  assert.equal(family.resources.money, moneyBefore - 2);
+  assert.equal(family.industryContracts.length, 1);
+  assert.equal(family.industryContracts[0].instanceId, "test-estate-1");
+});
+
+test("產業契券在回合結算提供歲入", () => {
+  const game = createGame({ playerCount: 2, seed: 19 });
+  const family = game.families[0];
+
+  family.industryContracts.push({
+    instanceId: "income-test",
+    name: "歲入測試",
+    region: "冀州",
+    income: { money: 2, food: 1 },
+  });
+
+  const moneyBefore = family.resources.money;
+  const foodBefore = family.resources.food;
+  settleIndustryIncome(game);
+
+  assert.equal(family.resources.money, moneyBefore + 2);
+  assert.equal(family.resources.food, foodBefore + 1);
+});
+
+test("有地方落腳理由後，才能用政務判定建立鄉里勢力", () => {
+  const game = createGame({ playerCount: 2, seed: 20 });
+  const family = game.families[0];
+
+  assert.equal(
+    getLegalActions(game, family).some(
+      (item) =>
+        item.type === ACTIONS.ESTABLISH_LOCAL_POWER &&
+        item.region === "豫州",
+    ),
+    false,
+  );
+
+  family.industryContracts.push({
+    instanceId: "yuzhou-test",
+    name: "豫州測試產業",
+    region: "豫州",
+    income: { money: 1, food: 1 },
+  });
+  family.stats.industries = family.industryContracts.length;
+  game.rng = () => 0.9999;
+
+  const action = getLegalActions(game, family).find(
+    (item) =>
+      item.type === ACTIONS.ESTABLISH_LOCAL_POWER &&
+      item.region === "豫州",
+  );
+
+  assert.ok(action);
+  applyAction(game, family, action);
+  assert.equal(family.stats.localRegions.has("豫州"), true);
+});
+
+test("關係 2 的通財讓第一次資產讓渡免費，第二次改耗主要行動", () => {
+  const game = createGame({ playerCount: 2, seed: 21 });
+  const a = game.families[0];
+  const b = game.families[1];
+  const relation = getFamilyRelation(game, a.id, b.id);
+
+  relation.depth = 2;
+  a.industryContracts.push(
+    {
+      instanceId: "transfer-1",
+      name: "契券一",
+      region: "冀州",
+      income: { money: 1, food: 0 },
+    },
+    {
+      instanceId: "transfer-2",
+      name: "契券二",
+      region: "相州",
+      income: { money: 0, food: 1 },
+    },
+  );
+  a.stats.industries = 2;
+
+  const actionsBefore = a.actionEconomy.remaining;
+  const first = transferIndustryContract(
+    game,
+    a.id,
+    b.id,
+    "transfer-1",
+  );
+
+  assert.equal(first.usedFreeTransfer, true);
+  assert.equal(a.actionEconomy.remaining, actionsBefore);
+
+  const second = transferIndustryContract(
+    game,
+    a.id,
+    b.id,
+    "transfer-2",
+  );
+
+  assert.equal(second.usedFreeTransfer, false);
+  assert.equal(a.actionEconomy.remaining, actionsBefore - 1);
+  assert.equal(b.industryContracts.length, 2);
+});
+
+test("放棄產業契券不退款，契券進入棄牌", () => {
+  const game = createGame({ playerCount: 2, seed: 22 });
+  const family = game.families[0];
+
+  family.industryContracts.push({
+    instanceId: "abandon-test",
+    name: "放棄測試",
+    region: "冀州",
+    income: { money: 1, food: 1 },
+  });
+  const moneyBefore = family.resources.money;
+
+  const contract = abandonIndustryContract(
+    game,
+    family.id,
+    "abandon-test",
+  );
+
+  assert.equal(contract.instanceId, "abandon-test");
+  assert.equal(family.resources.money, moneyBefore);
+  assert.equal(
+    game.industryDiscard.some(
+      (item) => item.instanceId === "abandon-test",
+    ),
+    true,
+  );
 });
 
 test("達成五項條件時，應取得五項歷史評定", () => {

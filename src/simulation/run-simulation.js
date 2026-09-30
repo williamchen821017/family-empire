@@ -26,6 +26,8 @@ let birthTotal = 0;
 let allianceTotal = 0;
 let depthTotal = 0;
 let relationCountTotal = 0;
+let industryTotal = 0;
+let localRegionTotal = 0;
 
 for (let index = 0; index < gameCount; index += 1) {
   const seed = 1000 + index;
@@ -47,6 +49,14 @@ for (let index = 0; index < gameCount; index += 1) {
   allianceTotal += relations.filter((relation) => relation.alliance).length;
   depthTotal += relations.reduce((sum, relation) => sum + relation.depth, 0);
   relationCountTotal += relations.length;
+  industryTotal += game.families.reduce(
+    (sum, family) => sum + family.industryContracts.length,
+    0,
+  );
+  localRegionTotal += game.families.reduce(
+    (sum, family) => sum + family.stats.localRegions.size,
+    0,
+  );
 
   if (outcome.winners.length > 1) sharedWinGames += 1;
 
@@ -70,7 +80,7 @@ for (let index = 0; index < gameCount; index += 1) {
   }
 
   if (gameCount === 1) {
-    console.log("《家族天下》AI 試跑 V0.4｜關係軌與盟約正式化");
+    console.log("《家族天下》AI 試跑 V0.5｜產業契券與鄉里勢力正式化");
     console.log(`Seed：${seed}`);
     console.log(`玩家數：${playerCount}`);
     console.log(`終局回合：第 ${game.round} 回合`);
@@ -109,7 +119,7 @@ for (let index = 0; index < gameCount; index += 1) {
 }
 
 if (gameCount > 1) {
-  console.log(`《家族天下》AI 批次試跑 V0.4：${gameCount} 局`);
+  console.log(`《家族天下》AI 批次試跑 V0.5：${gameCount} 局`);
   console.log(`玩家數：${playerCount}`);
   console.log(`平均終局回合：${(roundTotal / gameCount).toFixed(2)}`);
   console.log(`平均每局婚姻：${(marriageTotal / gameCount).toFixed(2)} 對`);
@@ -118,6 +128,8 @@ if (gameCount > 1) {
   console.log(
     `平均關係深度：${relationCountTotal ? (depthTotal / relationCountTotal).toFixed(2) : "0.00"}`,
   );
+  console.log(`平均每局終局產業契券：${(industryTotal / gameCount).toFixed(2)} 張`);
+  console.log(`平均每局終局鄉里勢力：${(localRegionTotal / gameCount).toFixed(2)} 個`);
   console.log(
     `共同勝利局數：${sharedWinGames}（${((sharedWinGames / gameCount) * 100).toFixed(1)}%）`,
   );
