@@ -13,6 +13,7 @@ const winCounts = new Map();
 const evaluationCounts = new Map();
 const endReasonCounts = new Map();
 let roundTotal = 0;
+let sharedWinGames = 0;
 
 for (let index = 0; index < gameCount; index += 1) {
   const seed = 1000 + index;
@@ -23,6 +24,8 @@ for (let index = 0; index < gameCount; index += 1) {
   });
 
   roundTotal += game.round;
+  if (outcome.winners.length > 1) sharedWinGames += 1;
+
   endReasonCounts.set(
     game.endReason,
     (endReasonCounts.get(game.endReason) ?? 0) + 1,
@@ -43,11 +46,12 @@ for (let index = 0; index < gameCount; index += 1) {
   }
 
   if (gameCount === 1) {
-    console.log("《家族天下》AI 試跑 V0.1");
+    console.log("《家族天下》AI 試跑 V0.2｜行動、官職、任務正式化");
     console.log(`Seed：${seed}`);
     console.log(`玩家數：${playerCount}`);
     console.log(`終局回合：第 ${game.round} 回合`);
     console.log(`終局原因：${game.endReason}`);
+    console.log(`終局時公開任務：${game.publicTasks.length} 張`);
     console.log("");
 
     for (const family of game.families) {
@@ -69,9 +73,12 @@ for (let index = 0; index < gameCount; index += 1) {
 }
 
 if (gameCount > 1) {
-  console.log(`《家族天下》AI 批次試跑：${gameCount} 局`);
+  console.log(`《家族天下》AI 批次試跑 V0.2：${gameCount} 局`);
   console.log(`玩家數：${playerCount}`);
   console.log(`平均終局回合：${(roundTotal / gameCount).toFixed(2)}`);
+  console.log(
+    `共同勝利局數：${sharedWinGames}（${((sharedWinGames / gameCount) * 100).toFixed(1)}%）`,
+  );
   console.log("");
 
   console.log("勝利次數（共同勝利會同時記入）：");

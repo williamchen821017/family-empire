@@ -1,3 +1,6 @@
+import { createOfficeBoard } from "../data/offices.js";
+import { createTaskDeck } from "../data/tasks.js";
+
 export const FAMILY_NAMES = [
   "清河崔氏",
   "范陽盧氏",
@@ -6,15 +9,32 @@ export const FAMILY_NAMES = [
   "太原王氏",
 ];
 
-export const REGIONS = ["冀州", "相州", "雍州", "豫州"];
+export const ACTION_CATEGORIES = Object.freeze([
+  "官職",
+  "政治",
+  "聯姻",
+  "軍事／武力",
+  "地方",
+  "家族",
+]);
 
 export const ACTIONS = Object.freeze({
-  FAMILY_GROWTH: "family_growth",
   SEEK_OFFICE: "seek_office",
-  MARRIAGE: "marriage",
-  INDUSTRY: "industry",
-  LOCAL_POWER: "local_power",
-  MISSION: "mission",
+  TAKE_TASK: "take_task",
+  GATHER_MONEY: "gather_money",
+  GATHER_FOOD: "gather_food",
+});
+
+export const BASE_ACTIONS_PER_ROUND = 3;
+export const MAX_EXTRA_ACTIONS = 2;
+export const PUBLIC_TASK_SLOTS = 3;
+
+export const ABILITY_RESULT_TABLE = Object.freeze({
+  1: ["fail", "fail", "fail", "fail", "success", "success"],
+  2: ["fail", "fail", "fail", "success", "success", "greatWin"],
+  3: ["fail", "fail", "success", "success", "greatWin", "greatVictory"],
+  4: ["fail", "success", "success", "success", "greatWin", "greatVictory"],
+  5: ["fail", "success", "success", "greatWin", "greatWin", "greatVictory"],
 });
 
 export const HISTORICAL_EVALUATIONS = Object.freeze([
@@ -37,8 +57,8 @@ export const HISTORICAL_EVALUATIONS = Object.freeze([
       return (
         family.stats.officeCharacterIds.size >= 3 &&
         generations.size >= 2 &&
-        family.stats.keyOfficeIds.size >= 1 &&
-        family.stats.currentOfficeIds.size >= 1
+        family.stats.keyOfficeCharacterIds.size >= 1 &&
+        family.stats.currentOfficeCharacterIds.size >= 1
       );
     },
   },
@@ -56,8 +76,10 @@ export const HISTORICAL_EVALUATIONS = Object.freeze([
   {
     id: "great_merit",
     name: "勳業至大",
-    check: (family) =>
-      family.stats.completedMissions >= 3 && family.stats.greatMissions >= 1,
+    check: (family) => {
+      const completed = family.history.completedTasks;
+      return completed.length >= 3 && completed.some((task) => task.major);
+    },
   },
 ]);
 
@@ -103,31 +125,78 @@ function createEventDeck(rng) {
   return [...upper, ...lower];
 }
 
-function createFamily(id, name) {
-  const members = [
-    { id: `${id}-g1-a`, generation: 1, adult: true, alive: true, age: 4 },
-    { id: `${id}-g1-b`, generation: 1, adult: true, alive: true, age: 4 },
-    { id: `${id}-g2-a`, generation: 2, adult: true, alive: true, age: 3 },
+function createMembers(familyId) {
+  return [
+    {
+      id: `${familyId}-g1-a`,
+      generation: 1,
+      adult: true,
+      alive: true,
+      actedThisRound: false,
+      currentOfficeId: null,
+      abilities: { 武略: 3, 政務: 4, 君心: 2, 交際: 3, 名望: 3 },
+    },
+    {
+      id: `${familyId}-g1-b`,
+      generation: 1,
+      adult: true,
+      alive: true,
+      actedThisRound: false,
+      currentOfficeId: null,
+      abilities: { 武略: 2, 政務: 3, 君心: 4, 交際: 3, 名望: 3 },
+    },
+    {
+      id: `${familyId}-g2-a`,
+      generation: 2,
+      adult: true,
+      alive: true,
+      actedThisRound: false,
+      currentOfficeId: null,
+      abilities: { 武略: 3, 政務: 2, 君心: 3, 交際: 4, 名望: 4 },
+    },
   ];
+}
 
+function createFamily(id, name) {
   return {
     id,
     name,
-    influence: 3,
-    members,
+    resources: {
+      money: 3,
+      food: 3,
+      influence: 3,
+      households: 0,
+      retainers: 0,
+    },
+    members: createMembers(id),
+    actionEconomy: {
+      baseActions: BASE_ACTIONS_PER_ROUND,
+      extraActions: 0,
+      remaining: BASE_ACTIONS_PER_ROUND,
+    },
+    history: {
+      completedTasks: [],
+    },
     stats: {
       births: 0,
       livingDescendants: 0,
       officeCharacterIds: new Set(),
-      currentOfficeIds: new Set(),
-      keyOfficeIds: new Set(),
+      currentOfficeCharacterIds: new Set(),
+      keyOfficeCharacterIds: new Set(),
       externalMarriageFamilies: new Set(),
       industries: 0,
       localRegions: new Set(),
-      completedMissions: 0,
-      greatMissions: 0,
     },
   };
+}
+
+function fillPublicTasks(game) {
+  while (
+    game.publicTasks.length < PUBLIC_TASK_SLOTS &&
+    game.taskDeck.length > 0
+  ) {
+    game.publicTasks.push(game.taskDeck.shift());
+  }
 }
 
 export function createGame({ playerCount = 4, seed = 1 } = {}) {
@@ -140,7 +209,7 @@ export function createGame({ playerCount = 4, seed = 1 } = {}) {
     createFamily(`family-${index + 1}`, name),
   );
 
-  return {
+  const game = {
     seed,
     rng,
     round: 1,
@@ -150,9 +219,59 @@ export function createGame({ playerCount = 4, seed = 1 } = {}) {
     endReason: null,
     eventDeck: createEventDeck(rng),
     eventDiscard: [],
+    officeBoard: createOfficeBoard(),
+    taskDeck: createTaskDeck(rng),
+    publicTasks: [],
+    taskDiscard: [],
     families,
     log: [],
   };
+
+  fillPublicTasks(game);
+  startRound(game);
+
+  return game;
+}
+
+export function resolveAbilityRoll(ability, die) {
+  if (!Number.isInteger(ability) || ability < 1 || ability > 5) {
+    throw new Error("能力值必須介於 1 到 5。");
+  }
+
+  if (!Number.isInteger(die) || die < 1 || die > 6) {
+    throw new Error("骰值必須介於 1 到 6。");
+  }
+
+  return ABILITY_RESULT_TABLE[ability][die - 1];
+}
+
+function rollD6(game) {
+  return Math.floor(game.rng() * 6) + 1;
+}
+
+function isSuccess(result) {
+  return result !== "fail";
+}
+
+export function grantExtraAction(family, amount = 1) {
+  const before = family.actionEconomy.extraActions;
+  family.actionEconomy.extraActions = Math.min(
+    MAX_EXTRA_ACTIONS,
+    family.actionEconomy.extraActions + Math.max(0, amount),
+  );
+  return family.actionEconomy.extraActions - before;
+}
+
+export function startRound(game) {
+  for (const family of game.families) {
+    for (const member of family.members) {
+      member.actedThisRound = false;
+    }
+
+    family.actionEconomy.remaining =
+      family.actionEconomy.baseActions + family.actionEconomy.extraActions;
+    family.actionEconomy.extraActions = 0;
+  }
 }
 
 function drawWorldEvents(game, count = 2) {
@@ -176,158 +295,223 @@ function drawWorldEvents(game, count = 2) {
   if (game.unrest >= 5 && !game.finalRound) {
     game.finalRound = true;
     game.endReason = "天下動盪達到 5";
-    game.log.push(`第 ${game.round} 回合：天下動盪達到 5，本回合為終局回合。`);
+    game.log.push(
+      `第 ${game.round} 回合：天下動盪達到 5，本回合為終局回合。`,
+    );
   }
 
   return drawn;
 }
 
-function findAdultWithoutOffice(family) {
-  return family.members.find(
-    (member) =>
-      member.alive &&
-      member.adult &&
-      !family.stats.officeCharacterIds.has(member.id),
+function memberCanAct(member) {
+  return member.alive && member.adult && !member.actedThisRound;
+}
+
+function officeById(game, officeId) {
+  return game.officeBoard.find((office) => office.id === officeId) ?? null;
+}
+
+function canSeekOffice(game, family, member, targetOffice) {
+  if (!memberCanAct(member)) return false;
+  if (family.resources.influence < 1) return false;
+  if (targetOffice.holder?.type === "player") return false;
+
+  const currentOffice = member.currentOfficeId
+    ? officeById(game, member.currentOfficeId)
+    : null;
+
+  if (!currentOffice) {
+    return targetOffice.level <= 2;
+  }
+
+  return (
+    targetOffice.id !== currentOffice.id &&
+    targetOffice.level === currentOffice.level + 1
   );
 }
 
-export function getLegalActions(game, family) {
-  const actions = [ACTIONS.MISSION];
+function getOfficeActions(game, family) {
+  const actions = [];
 
-  if (family.stats.births < 5) {
-    actions.push(ACTIONS.FAMILY_GROWTH);
-  }
+  for (const member of family.members) {
+    if (!memberCanAct(member)) continue;
 
-  if (findAdultWithoutOffice(family)) {
-    actions.push(ACTIONS.SEEK_OFFICE);
-  }
+    for (const office of game.officeBoard) {
+      if (!canSeekOffice(game, family, member, office)) continue;
 
-  if (family.stats.externalMarriageFamilies.size < game.families.length - 1) {
-    actions.push(ACTIONS.MARRIAGE);
-  }
-
-  if (family.stats.industries < 5) {
-    actions.push(ACTIONS.INDUSTRY);
-  }
-
-  if (family.stats.localRegions.size < REGIONS.length) {
-    actions.push(ACTIONS.LOCAL_POWER);
+      actions.push({
+        type: ACTIONS.SEEK_OFFICE,
+        category: "官職",
+        actorId: member.id,
+        targetOfficeId: office.id,
+        label: member.currentOfficeId ? "升遷" : "就任",
+      });
+    }
   }
 
   return actions;
 }
 
-function applyFamilyGrowth(game, family) {
-  if (game.rng() >= 0.5) return;
+function getTaskActions(game, family) {
+  const actions = [];
 
-  const nextGeneration =
-    Math.max(...family.members.map((member) => member.generation)) + 1;
-  const childId = `${family.id}-child-${family.stats.births + 1}`;
+  for (const member of family.members) {
+    if (!memberCanAct(member)) continue;
 
-  family.members.push({
-    id: childId,
-    generation: nextGeneration,
-    adult: false,
-    alive: true,
-    age: 0,
-  });
-  family.stats.births += 1;
-  family.stats.livingDescendants += 1;
+    for (const task of game.publicTasks) {
+      actions.push({
+        type: ACTIONS.TAKE_TASK,
+        category: task.actionCategory,
+        actorId: member.id,
+        taskInstanceId: task.instanceId,
+      });
+    }
+  }
+
+  return actions;
 }
 
-function applySeekOffice(game, family) {
-  const member = findAdultWithoutOffice(family);
-  if (!member || game.rng() >= 0.65) return;
+export function getLegalActions(game, family) {
+  if (family.actionEconomy.remaining <= 0) return [];
+
+  return [
+    ...getOfficeActions(game, family),
+    ...getTaskActions(game, family),
+    {
+      type: ACTIONS.GATHER_MONEY,
+      category: "家族",
+    },
+    {
+      type: ACTIONS.GATHER_FOOD,
+      category: "家族",
+    },
+  ];
+}
+
+function findMember(family, memberId) {
+  return family.members.find((member) => member.id === memberId) ?? null;
+}
+
+function spendAction(family) {
+  if (family.actionEconomy.remaining <= 0) {
+    throw new Error(`${family.name} 已無剩餘主要行動。`);
+  }
+
+  family.actionEconomy.remaining -= 1;
+}
+
+function applySeekOffice(game, family, action) {
+  const member = findMember(family, action.actorId);
+  const targetOffice = officeById(game, action.targetOfficeId);
+
+  if (!member || !targetOffice || !canSeekOffice(game, family, member, targetOffice)) {
+    throw new Error("這次任官／升遷已不是合法行動。");
+  }
+
+  family.resources.influence -= 1;
+  member.actedThisRound = true;
+
+  const die = rollD6(game);
+  const result = resolveAbilityRoll(member.abilities.君心, die);
+
+  if (!isSuccess(result)) {
+    return { die, result, success: false };
+  }
+
+  if (member.currentOfficeId) {
+    const oldOffice = officeById(game, member.currentOfficeId);
+    if (oldOffice?.holder?.type === "player") {
+      oldOffice.holder = null;
+    }
+  }
+
+  targetOffice.holder = {
+    type: "player",
+    familyId: family.id,
+    characterId: member.id,
+  };
+  member.currentOfficeId = targetOffice.id;
 
   family.stats.officeCharacterIds.add(member.id);
-  family.stats.currentOfficeIds.add(member.id);
-
-  if (game.rng() < 0.3) {
-    family.stats.keyOfficeIds.add(member.id);
+  family.stats.currentOfficeCharacterIds.add(member.id);
+  if (targetOffice.keyOffice) {
+    family.stats.keyOfficeCharacterIds.add(member.id);
   }
 
-  family.influence += 1;
+  return { die, result, success: true, officeId: targetOffice.id };
 }
 
-function applyMarriage(game, family) {
-  const candidates = game.families.filter(
-    (other) =>
-      other.id !== family.id &&
-      !family.stats.externalMarriageFamilies.has(other.id),
+function applyTask(game, family, action) {
+  const member = findMember(family, action.actorId);
+  const taskIndex = game.publicTasks.findIndex(
+    (task) => task.instanceId === action.taskInstanceId,
   );
+  const task = game.publicTasks[taskIndex];
 
-  if (!candidates.length) return;
-
-  const target = candidates[Math.floor(game.rng() * candidates.length)];
-  family.stats.externalMarriageFamilies.add(target.id);
-  target.stats.externalMarriageFamilies.add(family.id);
-  family.influence += 1;
-  target.influence += 1;
-}
-
-function applyIndustry(game, family) {
-  if (family.stats.industries >= 5) return;
-  if (game.rng() < 0.75) {
-    family.stats.industries += 1;
+  if (!member || !memberCanAct(member) || !task) {
+    throw new Error("這次承接任務已不是合法行動。");
   }
-}
 
-function applyLocalPower(game, family) {
-  const candidates = REGIONS.filter(
-    (region) => !family.stats.localRegions.has(region),
-  );
+  member.actedThisRound = true;
+  const die = rollD6(game);
+  const ability = member.abilities[task.ability];
+  const result = resolveAbilityRoll(ability, die);
 
-  if (!candidates.length || game.rng() >= 0.65) return;
+  game.publicTasks.splice(taskIndex, 1);
 
-  const region = candidates[Math.floor(game.rng() * candidates.length)];
-  family.stats.localRegions.add(region);
-}
+  if (isSuccess(result)) {
+    family.history.completedTasks.push({
+      instanceId: task.instanceId,
+      taskId: task.id,
+      name: task.name,
+      major: task.major,
+      result,
+      actorId: member.id,
+      round: game.round,
+    });
 
-function applyMission(game, family) {
-  if (game.rng() >= 0.65) return;
-
-  family.stats.completedMissions += 1;
-  family.influence += 1;
-
-  if (game.rng() < 0.25) {
-    family.stats.greatMissions += 1;
+    if (result === "success") family.resources.influence += 1;
+    if (result === "greatWin") family.resources.influence += 2;
+    if (result === "greatVictory") family.resources.influence += 3;
+  } else {
+    game.taskDiscard.push(task);
   }
+
+  fillPublicTasks(game);
+
+  return {
+    die,
+    result,
+    success: isSuccess(result),
+    taskName: task.name,
+    major: task.major,
+  };
 }
 
 export function applyAction(game, family, action) {
-  switch (action) {
-    case ACTIONS.FAMILY_GROWTH:
-      applyFamilyGrowth(game, family);
-      break;
-    case ACTIONS.SEEK_OFFICE:
-      applySeekOffice(game, family);
-      break;
-    case ACTIONS.MARRIAGE:
-      applyMarriage(game, family);
-      break;
-    case ACTIONS.INDUSTRY:
-      applyIndustry(game, family);
-      break;
-    case ACTIONS.LOCAL_POWER:
-      applyLocalPower(game, family);
-      break;
-    case ACTIONS.MISSION:
-      applyMission(game, family);
-      break;
-    default:
-      throw new Error(`未知行動：${action}`);
+  const legal = getLegalActions(game, family).some(
+    (candidate) => JSON.stringify(candidate) === JSON.stringify(action),
+  );
+
+  if (!legal) {
+    throw new Error("AI 嘗試執行目前不合法的行動。");
   }
-}
 
-function advanceFamilyTime(family) {
-  for (const member of family.members) {
-    if (!member.alive) continue;
+  spendAction(family);
 
-    member.age += 1;
-
-    if (!member.adult && member.age >= 2) {
-      member.adult = true;
-    }
+  switch (action.type) {
+    case ACTIONS.SEEK_OFFICE:
+      return applySeekOffice(game, family, action);
+    case ACTIONS.TAKE_TASK:
+      return applyTask(game, family, action);
+    case ACTIONS.GATHER_MONEY:
+      family.resources.money += 1;
+      return { success: true };
+    case ACTIONS.GATHER_FOOD:
+      family.resources.food += 1;
+      return { success: true };
+    default:
+      throw new Error(`未知行動：${action.type}`);
   }
 }
 
@@ -362,7 +546,6 @@ export function runGame({
   playerCount = 4,
   seed = 1,
   chooseAction,
-  actionsPerFamily = 3,
 } = {}) {
   if (typeof chooseAction !== "function") {
     throw new Error("runGame 需要 chooseAction 函式。");
@@ -373,8 +556,15 @@ export function runGame({
   while (!game.ended) {
     drawWorldEvents(game, 2);
 
-    for (let actionIndex = 0; actionIndex < actionsPerFamily; actionIndex += 1) {
+    let familiesWithActions = true;
+
+    while (familiesWithActions) {
+      familiesWithActions = false;
+
       for (const family of game.families) {
+        if (family.actionEconomy.remaining <= 0) continue;
+
+        familiesWithActions = true;
         const legalActions = getLegalActions(game, family);
         const action = chooseAction({
           game,
@@ -383,14 +573,13 @@ export function runGame({
           rng: game.rng,
         });
 
-        if (action) {
-          applyAction(game, family, action);
+        if (!action) {
+          family.actionEconomy.remaining = 0;
+          continue;
         }
-      }
-    }
 
-    for (const family of game.families) {
-      advanceFamilyTime(family);
+        applyAction(game, family, action);
+      }
     }
 
     if (game.finalRound || game.eventDeck.length === 0) {
@@ -400,6 +589,7 @@ export function runGame({
       }
     } else {
       game.round += 1;
+      startRound(game);
     }
 
     if (game.round > 20) {
@@ -416,16 +606,17 @@ export function runGame({
 export function familySnapshot(family) {
   return {
     name: family.name,
-    influence: family.influence,
-    births: family.stats.births,
-    livingDescendants: family.stats.livingDescendants,
+    money: family.resources.money,
+    food: family.resources.food,
+    influence: family.resources.influence,
     officials: family.stats.officeCharacterIds.size,
-    keyOfficials: family.stats.keyOfficeIds.size,
-    currentOfficials: family.stats.currentOfficeIds.size,
+    currentOfficials: family.stats.currentOfficeCharacterIds.size,
+    keyOfficials: family.stats.keyOfficeCharacterIds.size,
+    completedTasks: family.history.completedTasks.length,
+    greatTasks: family.history.completedTasks.filter((task) => task.major).length,
+    births: family.stats.births,
     marriageFamilies: family.stats.externalMarriageFamilies.size,
     industries: family.stats.industries,
     localRegions: family.stats.localRegions.size,
-    completedMissions: family.stats.completedMissions,
-    greatMissions: family.stats.greatMissions,
   };
 }
