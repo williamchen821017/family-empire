@@ -3,6 +3,8 @@ name: V04 Playtest Pages
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -11,7 +13,7 @@ permissions:
   id-token: write
 
 concurrency:
-  group: "pages"
+  group: "pages-${{ github.ref }}"
   cancel-in-progress: true
 
 jobs:
@@ -28,7 +30,12 @@ jobs:
           for f in v04/*.js; do node --check "$f"; done
 
   deploy:
+    if: github.event_name != 'pull_request'
     needs: validate
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
