@@ -1,0 +1,40 @@
+name: V04 AI Validation
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate-ai-workflow:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      - name: Run simulation unit tests
+        run: node sim/test.mjs
+
+      - name: Prepare artifacts
+        run: mkdir -p artifacts
+
+      - name: Audit Prototype sync gaps
+        run: node sim/audit-prototype.mjs --json > artifacts/prototype-audit.json
+
+      - name: Run seeded structural Monte Carlo
+        run: node sim/run-structural.mjs --seed "ci-${{ github.sha }}" --iterations 20000 --out artifacts/structural.json > /dev/null
+
+      - name: Save validation artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: family-empire-ai-validation-${{ github.run_number }}
+          path: artifacts/*.json
+          if-no-files-found: error
