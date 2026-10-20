@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+  schedule:
+    # Monday 11:17 Asia/Taipei (03:17 UTC)
+    - cron: '17 3 * * 1'
 
 permissions:
   contents: read
@@ -23,6 +26,9 @@ jobs:
       - name: Run simulation unit tests
         run: node sim/test.mjs
 
+      - name: Run headless engine tests
+        run: node sim/test-headless.mjs
+
       - name: Prepare artifacts
         run: mkdir -p artifacts
 
@@ -32,9 +38,17 @@ jobs:
       - name: Run seeded structural Monte Carlo
         run: node sim/run-structural.mjs --seed "ci-${{ github.sha }}" --iterations 20000 --out artifacts/structural.json > /dev/null
 
+      - name: Run quick headless self-play regression
+        run: node sim/run-selfplay.mjs --seed "quick-${{ github.sha }}" --games 500 --players 2,3,4,5 --fail-on-violation --out artifacts/selfplay-quick.json > /dev/null
+
+      - name: Run weekly deep headless self-play
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        run: node sim/run-selfplay.mjs --seed "deep-${{ github.sha }}-${{ github.run_id }}" --games 10000 --players 2,3,4,5 --fail-on-violation --out artifacts/selfplay-deep.json > /dev/null
+
       - name: Save validation artifacts
         uses: actions/upload-artifact@v4
         with:
           name: family-empire-ai-validation-${{ github.run_number }}
           path: artifacts/*.json
           if-no-files-found: error
+          retention-days: 30
