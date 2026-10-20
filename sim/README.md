@@ -1,75 +1,126 @@
 # V04 Simulation / AI Testing
 
-這個資料夾的目的不是建立第二份遊戲規則，而是建立**可重播、可稽核、會拒絕猜規則**的測試基礎。
+這個資料夾不是第二份遊戲規則。它是一套**可重播、可稽核、會拒絕猜規則**的測試系統。
 
-## 現在可以執行
+## 已完成：Headless Test Engine MVP
 
-### 1. 單元測試
+核心資料流已建立：
+
+```
+state
+  ↓
+legalActions(state)
+  ↓
+AI policy 只從合法選項挑選
+  ↓
+applyAction(state, action)
+  ↓
+invariantCheck(state)
+  ↓
+round / ◆ settlement
+```
+
+主要檔案：
+
+- `headless/state.mjs`：Setup、遊戲狀態、事件牌序。
+- `headless/legal-actions.mjs`：唯一合法行動入口。
+- `headless/apply-action.mjs`：action reducer；非法 action 直接拒絕。
+- `headless/invariants.mjs`：每一步後檢查不可能狀態。
+- `headless/settlement.mjs`：回合、◆、生產、重要出生、資歷、老化、死亡、爵位父系繼承。
+- `headless/legends.mjs`：四項家族傳奇檢查。
+- `headless/engine.mjs`：Seed deterministic 自走對局。
+- `policies.mjs`：random / expansion / conservative / political。
+- `run-selfplay.mjs`：2–5人批量 AI self-play。
+
+## 現在真正自動化的範圍
+
+MVP 已執行：
+- 2–5人 Setup 與七家測試快照。
+- 每家每回合3次主要行動、輪流行動。
+- 每人物需人物行動×2、正常移動×1。
+- 籌措錢幣【TEST once/round】。
+- 買糧。
+- 取得產業與容量／供應檢查。
+- 組建家兵、調動家兵、超額家兵維持。
+- 入仕與資歷2→3的薦舉／名望判定骨架。
+- 玩家—玩家婚姻提案、接受／拒絕；拒婚只封鎖該人物配對。
+- ◆生產、每家每◆最多一次重要出生。
+- 成年成長、資歷成長、老化、老年死亡。
+- 男系爵位繼承的基本規則。
+- 四項家族傳奇。
+- Seed 重播、逐步 invariant check。
+
+## 明確尚未覆蓋
+
+目前 self-play 報告會列出 `coverageGaps`，包括：
+
+- 一般事件的個別卡面效果（目前只使用◆時間節奏）。
+- 8種手牌。
+- NPC 名門婚姻完整名單與提親流程。
+- 盟約。
+- 開放官職的完整競逐。
+- 王軍總量／王軍授權。
+- 《王座上的少年》完整危機、清算、保全與新局安排。
+- 事件封爵與爵位資格的完整應用。
+- 寡婦再婚等尚未鎖定細節。
+
+因此目前 core self-play **不是正式勝率證據**；輸出固定標記：
+
+```json
+"balanceEligible": false
+```
+
+它目前的用途是：
+1. 抓死局與程式／規則矛盾。
+2. 確認永久行動與歲月循環能長期運行。
+3. 監測機制使用率與資源異常。
+4. 為之後逐步補齊完整 V04 提供可回歸的基線。
+
+## 執行方式
+
+### 單元測試
 
 ```bash
 node sim/test.mjs
+node sim/test-headless.mjs
 ```
 
-檢查：
-- Seed RNG 可重播
-- 不同 AI policy 會有不同偏好
-- 已確認結構參數存在
-- 未確認規則不會偷偷得到預設值
-
-### 2. Prototype 差異稽核
+### Prototype 差異稽核
 
 ```bash
 node sim/audit-prototype.mjs
 node sim/audit-prototype.mjs --json
 ```
 
-它只會標出已知「Prototype 尚未同步」的模式，不會替你修改規則。
-
-目前差異是 warning，不會讓 CI 失敗，因為使用者已明確允許舊 Prototype 暫時不同步。
-
-### 3. 結構型 Monte Carlo
+### 結構型 Monte Carlo
 
 ```bash
 node sim/run-structural.mjs --seed demo-001 --iterations 50000
-node sim/run-structural.mjs --seed demo-001 --iterations 50000 --out artifacts/structural.json
 ```
 
-目前只測「不需要完整玩家 AI 就能安全驗證」的結構，例如：
-- T2 10張一般事件／6張◆下，第4個◆出現位置
-- 2–5 人每回合桌面總主要行動量
-- 每家重要出生在第4◆前的理論上限
+### AI self-play
 
-## AI policies
+```bash
+node sim/run-selfplay.mjs --seed demo-001 --games 1000 --players 2,3,4,5
+```
 
-`sim/policies.mjs` 已建立：
-- random
-- expansion
-- conservative
-- political
+CI 要求發現 invariant 違規就失敗：
 
-**重要：policy 只能從 headless engine 給的合法行動中選。**  
-policy 本身沒有資格判定合法性，因此不能把 AI 假設變成規則。
+```bash
+node sim/run-selfplay.mjs --seed ci --games 500 --players 2,3,4,5 --fail-on-violation
+```
 
-## 還不能誠實宣稱完成的部分
+### Strict V04 模式
 
-目前 repo 沒有獨立 Node.js headless game engine；瀏覽器 `v04/*.js` 又包含舊規則與 DOM 依賴。
+Headless test 另會驗證 strict 模式：碰到尚未實作、但正式終局必須依賴的《王座上的少年》危機時，測試必須以 `UNKNOWN_RULE`／`unknown-rule-blocked` 停止，而不是偷偷創造危機結果。
 
-因此現在**不能**把舊 Prototype 包一層亂數選擇器，就宣稱已完成 V04 全自動 AI self-play。
+## 長期自動執行
 
-完整自走測試需要下一階段：
+`.github/workflows/ai-validation.yml`：
 
-1. 把規則核心拆成無 DOM 的 headless state / legal-actions / reducer。
-2. 每條 reducer 規則都附 source id 與 status。
-3. legal-actions 遇到【待確認】規則時回報 unknown，不自行決定。
-4. policies 從合法行動中選擇。
-5. runner 保存 seed、逐回合 state hash、違規位置與最終結果。
+- 每次 push / PR：unit + headless tests、Prototype audit、structural Monte Carlo、500局快速 self-play。
+- 每週一 11:17（台北時間）：再跑10,000局深度 self-play。
+- 手動 workflow_dispatch：也會跑10,000局深度 self-play。
+- JSON 結果保存為 GitHub Actions artifact 30天。
 
-## GitHub Actions
-
-`.github/workflows/ai-validation.yml` 會自動：
-- 跑 sim unit tests
-- 產生 Prototype audit JSON
-- 用 commit SHA 當 Seed 跑 structural Monte Carlo
-- 把 JSON 上傳為 Actions artifact
-
-這讓每次工程變更都有可追溯的測試紀錄，而不需要額外付費工具。
+任何勝率或傳奇完成率，在 `balanceEligible` 變成 true 以前，都只能當工程／壓力測試訊號，不能自動改 V04。
