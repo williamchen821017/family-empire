@@ -10,3 +10,15 @@
 - 不採取會鎖死未來發展的技術方案
 - 實體桌遊與數位版本以相同的核心遊戲規則為基礎
 - 每項功能完成後進行實際測試，再進入下一項功能
+
+## V04 AI 測試與規則管理
+
+本 repo 現在把「規則權威、Prototype 實作、模擬假設」分開管理：
+
+- `docs/AI_WORKFLOW.md`：AI 工作室職責、規則來源與變更流程。
+- `docs/IMPLEMENTATION_STATUS.md`：目前桌遊主線與瀏覽器 Prototype 的已知差異；**不是規則來源**。
+- `sim/`：Seed 可重播的結構測試、Prototype 差異稽核與 AI policy 介面。
+- `.github/workflows/ai-validation.yml`：每次 push / PR 自動跑測試並保存 JSON artifacts。
+
+重要原則：**V04 正式交接文件及後續正式決策才是遊戲規則最高依據。**  
+瀏覽器 Prototype 與模擬器不得反過來決定正式桌遊規則。
