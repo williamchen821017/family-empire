@@ -18,7 +18,12 @@ export const RULES_PROFILE = {
     ordinaryDiamondCount: 6,
     endgameMaturesAtDiamond: 4,
     importantBirthChecksPerFamilyPerDiamond: 1,
-    marriageLegendDistinctNewFamilies: 3
+    marriageLegendDistinctNewFamilies: 3,
+    formTroopMoneyCost: 1,
+    seniority2to3InfluenceCost: 1,
+    oldDeathMaxRoll: 3,
+    normalBirthMinRoll: 2,
+    lateBirthMinRoll: 4
   },
 
   test: {
@@ -28,7 +33,8 @@ export const RULES_PROFILE = {
     wealthLegendMoneyPlusFood: 20,
     normalTroopCapacity: 3,
     excessTroopMoneyCostEach: 1,
-    fundraiseOncePerRound: true
+    fundraiseOncePerRound: true,
+    minimumLegendForWin: 1
   },
 
   unknown: {
