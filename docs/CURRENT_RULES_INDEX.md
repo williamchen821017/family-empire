@@ -1,159 +1,111 @@
 # 《家族天下》V04｜CURRENT_RULES_INDEX
 
-> 用途：指出現行規則的權威來源、最新快照、已知版本衝突與工程實作狀態。
+> 用途：規則來源導航與版本衝突管理。
 >
-> **本檔是索引，不是另一份規則書。**
+> 本檔是索引，不是另一份規則書。
 >
-> 最後更新：2026-10-26
+> 最後更新：2026-10-26  
+> 快照版本：HANDOFF-2026-10-26-R2
 
-## 1. 規則權威順序
+## 1. 權威順序
 
 由高到低：
 
-1. V04 正式完整交接文件。
-2. 該交接文件之後，由使用者在現役 Main 明確確認的正式決策。
-3. `docs/V04_PROJECT_STATE_2026-10-26.md`：跨聊天搬遷用現況快照；若與第 1、2 項衝突，以第 1、2 項為準。
-4. `docs/IMPLEMENTATION_STATUS.md`：只記錄桌遊規則與 Prototype / Headless Engine 的同步狀況，不得反向決定規則。
-5. 瀏覽器 Prototype、Headless Engine、AI Simulation：都是實作／測試工具，程式中存在某條規則不代表該規則已定案。
-6. 更舊的 V03、V1、早期 V04、舊 Prototype 文件：僅供歷史追溯，不得覆蓋後續 V04 決議。
+1. V04 正式完整交接文件＋其後由使用者明確確認的正式決策。
+2. `docs/V04_CURRENT_RULES.md`：目前已確認規則的整合版。
+3. `docs/V04_PROJECT_STATE_2026-10-26.md`：目前專案進度快照。
+4. `docs/V04_T2_DATA.md`：T2 人物、家族 Setup、事件、手牌、地圖等測試資料。
+5. `docs/V04_YOUNG_KING_CRISIS.md`：《王座上的少年》危機骨架與版本衝突。
+6. `docs/PROGRAM_STATUS.md`、`docs/IMPLEMENTATION_STATUS.md`：只決定程式同步到哪裡。
+7. Prototype / Headless Engine / AI Simulation：都是實作／測試工具，不得反向決定桌遊規則。
+8. 更舊 V03、V1、早期 V04、舊 Prototype 文件：只供歷史追溯。
 
 ## 2. 現役 Main
 
-目前現役主線應視為：
+現役主線：
 
-**🟢 Main｜家族天下｜V04｜主線開發（現行聊天）**
+**🟢 Main｜家族天下｜V04｜主線開發（2026-10-26 後現役）**
 
-舊的同名聊天已達對話長度上限，應視為：
+舊的同名 Main 已達對話長度上限，視為：
 
 **🔵 Archive｜家族天下｜V04｜主線開發｜01**
 
-舊 Main 可查歷史，但不再新增決策。
+舊 Main 可查證歷史，但不再新增正式決策。
 
-## 3. 已確認的搬家修正
+## 3. 規則狀態標籤
 
-### 3.1 能力名稱
+- 【已定】：正式決策，可實作。
+- 【TEST】：第一測／平衡測試值，可調整。
+- 【待確認】：尚未拍板，不得補值。
+- 【新提案】：討論方案，尚未採用。
+- 【撤回】：已刪除，不得因舊檔或舊程式自行復活。
+- 【待核對｜版本衝突】：保存資料互相矛盾，必須等使用者重新確認。
 
-玩家規則正式使用：
+## 4. 搬家修正
 
+### 五能力正式名稱
+
+玩家-facing 一律使用：
 - 武略
 - 治理
 - 王心
 - 交際
 - 名望
 
-**「統率」不是現行玩家規則名稱。**
+「統率」不是現行玩家規則名稱。程式內部若仍用 `command` 可保留，但 UI／規則書／人物卡不得顯示成「統率」。
 
-程式內部若仍使用 `command` 等欄位名稱，可作技術命名保留；但 UI、規則書、人物卡、PDF、測試報告顯示文字應使用「武略」。
+### 成長指定能力
 
-## 4. 已知版本衝突
+不是少年專屬。現行人物資料中，兒童也可能已預先指定未來成長能力。因此人物卡規格應寫：
 
-### 4.1 《王座上的少年》三個前置節點
+> 凡人物資料中存在預定成長能力，就以最小型固有提示標示。
 
-目前找到兩個互相衝突的版本：
+不得寫成「只有少年卡才有成長指定數值」。
 
-版本 A：
+## 5. 已知版本衝突
+
+### 《王座上的少年》三張前置節點
+
+已知：
 - 《宮門前的沉默》
 - 《燈火直到深夜》
 - 《來自松原的信》
-- 三張洗混後暗中移除 1 張，本局只出現其中 2 張
 
-版本 B：
-- 上述三張全部出現
-- 然後進入《少年密林王的怒火》
+版本 A：三張洗混後暗中移除 1 張，本局只出現 2 張。  
+版本 B：三張全部出現，再進入《少年密林王的怒火》。
 
-目前無法從現有保存資料證明哪一個是最後正式決策。
+目前無法證明哪一版是最後正式決策，因此為：
 
-正式狀態：
+> 【待核對｜版本衝突】
 
-> **【待核對｜版本衝突】不得由 AI、Prototype 或 Headless Engine 自行選一版。**
+在重新確認以前：
+- 規則書不得自行選邊。
+- Headless Engine 不得補版本。
+- Simulation 需要此流程時應回報 `UNKNOWN_RULE`。
 
-在使用者重新確認以前：
-- 規則文件不得把其中一版標成【已定】
-- AI Simulation 不得把其中一版偷偷寫成預設值
-- 若模擬需要此流程，應標記 `UNKNOWN_RULE`
-
-## 5. 現行規則／設計快照
-
-目前整合快照：
-
-- `docs/V04_PROJECT_STATE_2026-10-26.md`
-
-該檔保存：
-- 現行設計原則
-- T2 測試環境
-- 回合與主要行動
-- 人物、能力、生命週期
-- 四項家族傳奇
-- 資源
-- 地理、根基、產業
-- 官職／資歷
-- 婚姻／盟約
-- 軍事／王軍
-- 世界事件
-- 爵位
-- 《王座上的少年》
-- 手牌
-- 七大家族 Setup
-- 美術方向
-- AI／Headless Engine 工程狀態
-- 【TEST】與【待確認】
-- 已撤回／禁止復活的舊設計
-
-## 6. GitHub 工程文件的角色
-
-### `docs/AI_WORKFLOW.md`
-記錄：
-- AI 工作室四職能
-- 規則來源管理
-- 自動測試原則
-- 未定規則不得補值
-
-### `docs/IMPLEMENTATION_STATUS.md`
-記錄：
-- 現行桌遊規則 vs 瀏覽器 Prototype
-- 現行桌遊規則 vs Headless Engine
-- 已同步／未同步／coverage gap
-
-### `sim/`
-用途：
-- deterministic RNG
-- structural tests
-- headless self-play
-- invariant checks
-- AI policies
-
-**`sim/` 永遠不是規則權威來源。**
-
-## 7. 之後每次正式決策的更新方式
-
-每次在現役 Main 產生正式決策後：
-
-1. 先在聊天中明確標示【已定】【TEST】【待確認】【撤回】。
-2. 若影響完整規則，更新最新 `docs/V04_PROJECT_STATE_YYYY-MM-DD.md`；建立新快照時將舊快照移到 `docs/archive/`。
-3. 若影響版本來源／衝突，更新 `docs/CURRENT_RULES_INDEX.md`。
-4. 若影響程式，先更新 `docs/IMPLEMENTATION_STATUS.md`，再決定是否同步 Prototype / Headless Engine。
-5. AI 測試結果只能提供設計判斷，不得自動修改正式規則或把 TEST 升格為已定。
-
-## 8. 原始聊天保存原則
-
-原始 ChatGPT 對話是歷史證據／決策追溯資料，不是日常規則書。
-
-建議：
-- GitHub 只保存整理過、去除私人資料的專案快照與決策紀錄。
-- 原始完整聊天匯出另行保存在私人本機／私人雲端／私人 repo。
-- 若 `family-empire` 是 Public，**不要上傳整個 ChatGPT 帳號的 `conversations.json`**。
-
-## 9. 新聊天接手最低讀取順序
-
-任何新 AI／新聊天接手時，先讀：
+## 6. 新聊天接手讀取順序
 
 1. `docs/CURRENT_RULES_INDEX.md`
-2. 當時最新的 `docs/V04_PROJECT_STATE_YYYY-MM-DD.md`
-3. `docs/AI_WORKFLOW.md`
-4. `docs/IMPLEMENTATION_STATUS.md`
+2. `docs/V04_CURRENT_RULES.md`
+3. `docs/V04_PROJECT_STATE_2026-10-26.md`
+4. `docs/V04_T2_DATA.md`
+5. `docs/V04_YOUNG_KING_CRISIS.md`
+6. `docs/OPEN_ISSUES.md`
+7. `docs/ART_CHARACTER_CARD_SPEC.md`
+8. `docs/ART_VISUAL_BIBLE_STATUS.md`
+9. `docs/PROGRAM_STATUS.md`
+10. `docs/AI_WORKFLOW.md`
+11. `docs/IMPLEMENTATION_STATUS.md`
 
-然後：
-- 不重新規劃
-- 不用舊 Prototype 反駁新規則
-- 遇到版本衝突先停下來標記
-- 不自行猜答案
+接手後：
+- 不重新規劃已定核心。
+- 不用舊 Prototype 推翻新規則。
+- 不把 AI 推測寫成【已定】。
+- 遇到版本衝突先標記。
+- 使用者說「繼續調整數值」時，依 `OPEN_ISSUES.md` 的數值池繼續。
+
+## 7. GitHub 的角色
+
+GitHub 是：規則保存與交接中心、程式原始碼中心、AI 測試結果中心、美術規格文字中心。
+
+GitHub 不是：自動把 Prototype 程式變成規則真相，也不是把 AI Simulation 結果自動變成新規則。
